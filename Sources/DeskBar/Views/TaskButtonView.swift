@@ -31,6 +31,10 @@ struct TaskButtonPluginMenuConfiguration {
 }
 
 final class TaskButtonView: NSView, NSDraggingSource {
+    static let minimumTaskWidth: CGFloat = 56
+    static let minimumPluginActionTaskWidth: CGFloat = 88
+    static let minimumAdaptiveTaskWidth: CGFloat = 40
+    static let minimumAdaptivePluginActionTaskWidth: CGFloat = 72
     private static var activeHoverView: TaskButtonView?
     static let dragPasteboardType = NSPasteboard.PasteboardType("com.deskbar.task")
 
@@ -77,10 +81,13 @@ final class TaskButtonView: NSView, NSDraggingSource {
     private var hoverWorkItem: DispatchWorkItem?
     private var thumbnailRequestTask: Task<Void, Never>?
     private var maxWidthConstraint: NSLayoutConstraint?
+    private var widthCap: CGFloat?
+    private var usesAdaptiveWidth = false
     private var statusDefaultLeadingConstraint: NSLayoutConstraint?
     private var statusSMLeadingConstraint: NSLayoutConstraint?
     private var iconDefaultLeadingConstraint: NSLayoutConstraint?
     private var iconSMLeadingConstraint: NSLayoutConstraint?
+    private var titleLeadingConstraint: NSLayoutConstraint?
     private var titleTrailingConstraint: NSLayoutConstraint?
     private var progressWidthConstraint: NSLayoutConstraint?
     private var dropIndicatorLeadingConstraint: NSLayoutConstraint?
@@ -118,7 +125,11 @@ final class TaskButtonView: NSView, NSDraggingSource {
         return .normal
     }
 
-    private var effectiveTaskWidth: CGFloat {
+    var preferredTaskWidth: CGFloat {
+        usesAdaptiveWidth ? adaptiveTaskWidth : fullTaskWidth
+    }
+
+    private var fullTaskWidth: CGFloat {
         guard agentAnnotation != nil else {
             return maxWidth
         }
@@ -132,6 +143,65 @@ final class TaskButtonView: NSView, NSDraggingSource {
         let textWidth = (friendlyName as NSString).size(withAttributes: [.font: font]).width
         let extraWidth: CGFloat = showsPluginActionButton ? 106 : 76
         return min(max(maxWidth, ceil(textWidth + extraWidth)), 340)
+    }
+
+    private var adaptiveTaskWidth: CGFloat {
+        Self.preferredWidth(
+            title: resolvedTitle(),
+            font: titleLabel.font ?? NSFont.systemFont(ofSize: settings.titleFontSize),
+            maxWidth: maxWidth,
+            showsTitles: settings.showTitles,
+            showsPluginActionButton: showsPluginActionButton,
+            isAgentWindow: agentAnnotation != nil
+        )
+    }
+
+    var minimumTaskWidth: CGFloat {
+        minimumTaskWidth(usesAdaptiveWidth: usesAdaptiveWidth)
+    }
+
+    func widthPlanItem(usesAdaptiveWidth: Bool) -> TaskbarWidthPlanItem {
+        let preferredWidth = usesAdaptiveWidth ? adaptiveTaskWidth : fullTaskWidth
+        return TaskbarWidthPlanItem(
+            preferredWidth: preferredWidth,
+            minimumWidth: minimumTaskWidth(usesAdaptiveWidth: usesAdaptiveWidth)
+        )
+    }
+
+    static func preferredWidth(
+        title: String,
+        font: NSFont,
+        maxWidth: CGFloat,
+        showsTitles: Bool,
+        showsPluginActionButton: Bool,
+        isAgentWindow: Bool
+    ) -> CGFloat {
+        let minimumWidth = showsPluginActionButton ? minimumPluginActionTaskWidth : minimumTaskWidth
+        guard showsTitles else {
+            return minimumWidth
+        }
+
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let textWidth = trimmedTitle.isEmpty ? 0 : (trimmedTitle as NSString).size(withAttributes: [.font: font]).width
+        let extraWidth: CGFloat = showsPluginActionButton ? 106 : 56
+        let maximumWidth = isAgentWindow ? min(max(maxWidth, 240), 340) : maxWidth
+        return min(max(minimumWidth, ceil(textWidth + extraWidth)), maximumWidth)
+    }
+
+    private var effectiveTaskWidth: CGFloat {
+        let cappedWidth = widthCap.map { min(preferredTaskWidth, max(minimumTaskWidth, $0)) }
+        return cappedWidth ?? preferredTaskWidth
+    }
+
+    private var usesIconOnlyLayout: Bool {
+        guard usesAdaptiveWidth, settings.showTitles else {
+            return false
+        }
+
+        let titleThreshold = showsPluginActionButton
+            ? Self.minimumPluginActionTaskWidth
+            : Self.minimumTaskWidth
+        return effectiveTaskWidth < titleThreshold
     }
 
     private var showsPluginActionButton: Bool {
@@ -208,6 +278,18 @@ final class TaskButtonView: NSView, NSDraggingSource {
 
     override var intrinsicContentSize: NSSize {
         return NSSize(width: effectiveTaskWidth, height: 32)
+    }
+
+    func setWidthMode(usesAdaptiveWidth: Bool, widthCap: CGFloat?) {
+        let normalizedWidthCap = widthCap.map { max(0, floor($0)) }
+        if self.usesAdaptiveWidth == usesAdaptiveWidth,
+           approximatelyEqual(self.widthCap, normalizedWidthCap) {
+            return
+        }
+
+        self.usesAdaptiveWidth = usesAdaptiveWidth
+        self.widthCap = normalizedWidthCap
+        updateWidthConstraint()
     }
 
     override func layout() {
@@ -382,7 +464,9 @@ final class TaskButtonView: NSView, NSDraggingSource {
 
         let maxWidthConstraint = widthAnchor.constraint(equalToConstant: effectiveTaskWidth)
         self.maxWidthConstraint = maxWidthConstraint
+        let titleLeadingConstraint = titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8)
         let titleTrailingConstraint = titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10)
+        self.titleLeadingConstraint = titleLeadingConstraint
         self.titleTrailingConstraint = titleTrailingConstraint
         let progressWidthConstraint = progressFillView.widthAnchor.constraint(equalToConstant: 0)
         self.progressWidthConstraint = progressWidthConstraint
@@ -417,7 +501,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
             iconView.widthAnchor.constraint(equalToConstant: 24),
             iconView.heightAnchor.constraint(equalToConstant: 24),
 
-            titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
+            titleLeadingConstraint,
             titleTrailingConstraint,
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
 
@@ -450,8 +534,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
                 self?.titleLabel.font = NSFont.systemFont(ofSize: value)
-                self?.maxWidthConstraint?.constant = self?.effectiveTaskWidth ?? value
-                self?.invalidateIntrinsicContentSize()
+                self?.updateWidthConstraint()
             }
             .store(in: &cancellables)
 
@@ -459,16 +542,15 @@ final class TaskButtonView: NSView, NSDraggingSource {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
                 self?.maxWidth = value
-                self?.maxWidthConstraint?.constant = self?.effectiveTaskWidth ?? value
-                self?.invalidateIntrinsicContentSize()
+                self?.updateWidthConstraint()
             }
             .store(in: &cancellables)
 
         settings.$showTitles
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
-                self?.titleLabel.isHidden = !value
-                self?.invalidateIntrinsicContentSize()
+                _ = value
+                self?.updateWidthConstraint()
             }
             .store(in: &cancellables)
 
@@ -485,8 +567,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
             }
 
             self.updateAppearance()
-            self.maxWidthConstraint?.constant = self.effectiveTaskWidth
-            self.invalidateIntrinsicContentSize()
+            self.updateWidthConstraint()
         }
 
         settings.$enableSessionManagerPlugin
@@ -817,6 +898,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         iconView.image = displayIcon()
         iconView.alphaValue = iconAlpha()
         updateTaskButtonPluginActionButton()
+        updateTitleVisibility()
         updateStatusIndicator()
         updateActivityBadge()
         updateProgressIndicator()
@@ -856,7 +938,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         self.showsActivityOverlay = showsActivityOverlay
         self.agentAnnotation = agentAnnotation
         self.pluginMenuConfiguration = pluginMenuConfiguration
-        maxWidthConstraint?.constant = effectiveTaskWidth
+        updateWidthConstraint()
 
         if previousWindowID != windowInfo.cgWindowID {
             windowElement = Self.resolveWindowElement(
@@ -871,6 +953,29 @@ final class TaskButtonView: NSView, NSDraggingSource {
         }
 
         updateAppearance()
+    }
+
+    private func updateWidthConstraint() {
+        maxWidthConstraint?.constant = effectiveTaskWidth
+        updateTitleVisibility()
+        invalidateIntrinsicContentSize()
+        needsLayout = true
+        superview?.needsLayout = true
+    }
+
+    private func updateTitleVisibility() {
+        let showsTitle = settings.showTitles && !usesIconOnlyLayout
+        titleLabel.isHidden = !showsTitle
+        titleLeadingConstraint?.isActive = showsTitle
+        titleTrailingConstraint?.isActive = showsTitle
+    }
+
+    private func minimumTaskWidth(usesAdaptiveWidth: Bool) -> CGFloat {
+        if usesAdaptiveWidth {
+            return showsPluginActionButton ? Self.minimumAdaptivePluginActionTaskWidth : Self.minimumAdaptiveTaskWidth
+        }
+
+        return showsPluginActionButton ? Self.minimumPluginActionTaskWidth : Self.minimumTaskWidth
     }
 
     @objc

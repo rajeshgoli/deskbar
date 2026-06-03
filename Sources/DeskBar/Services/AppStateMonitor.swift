@@ -14,6 +14,7 @@ final class AppStateMonitor: ObservableObject {
     private var attentionDeadlines: [pid_t: Date] = [:]
     private var cpuSamples: [pid_t: CPUSample] = [:]
     private var previousProgressFractions: [pid_t: Double] = [:]
+    private var isActivitySamplingEnabled = false
 
     init(accessibilityService: AccessibilityService = AccessibilityService()) {
         self.accessibilityService = accessibilityService
@@ -35,6 +36,18 @@ final class AppStateMonitor: ObservableObject {
 
     func requestAttention(for pid: pid_t, duration: TimeInterval = 1.6) {
         attentionDeadlines[pid] = Date().addingTimeInterval(duration)
+        refresh()
+    }
+
+    func setActivitySamplingEnabled(_ isEnabled: Bool) {
+        guard isActivitySamplingEnabled != isEnabled else {
+            return
+        }
+
+        isActivitySamplingEnabled = isEnabled
+        if !isEnabled {
+            cpuSamples.removeAll()
+        }
         refresh()
     }
 
@@ -97,9 +110,18 @@ final class AppStateMonitor: ObservableObject {
     private func startPollTimer() {
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.refresh()
+                guard let self, self.requiresPeriodicRefresh else {
+                    return
+                }
+
+                self.refresh()
             }
         }
+        pollTimer?.tolerance = 0.5
+    }
+
+    private var requiresPeriodicRefresh: Bool {
+        isActivitySamplingEnabled || !launchDeadlines.isEmpty || !attentionDeadlines.isEmpty
     }
 
     private func refresh() {
@@ -118,9 +140,14 @@ final class AppStateMonitor: ObservableObject {
 
         for application in applications {
             let pid = application.processIdentifier
-            let windows = AXIsProcessTrusted() ? accessibilityService.enumerateWindows(for: application) : []
-            let resourceSample = sampleResources(for: pid, timestamp: timestamp)
-            let progressFraction = progressFraction(for: windows)
+            let shouldInspectWindows = launchDeadlines[pid] != nil
+            let windows = shouldInspectWindows && AXIsProcessTrusted()
+                ? accessibilityService.enumerateWindows(for: application)
+                : []
+            let resourceSample = isActivitySamplingEnabled
+                ? sampleResources(for: pid, timestamp: timestamp)
+                : ResourceSample(cpuPercent: nil, memoryMB: nil)
+            let progressFraction = shouldInspectWindows ? progressFraction(for: windows) : nil
             let previousProgress = previousProgressFractions[pid]
 
             if let previousProgress,

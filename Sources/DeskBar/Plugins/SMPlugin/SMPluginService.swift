@@ -140,6 +140,20 @@ private struct SMAgentTabFetchSnapshot {
     let annotations: [SMAgentWindowAnnotation]
     let liveSessionIDs: Set<String>
     let terminalTabCountByWindowID: [CGWindowID: Int]
+    let sessionMappingIdentities: Set<SMSessionMappingIdentity>
+}
+
+private struct SMSessionMappingIdentity: Hashable {
+    let id: String
+    let tmuxSession: String
+    let tmuxSocketName: String?
+}
+
+private enum SMPluginRefreshResult {
+    case mapped(SMAgentTabFetchSnapshot)
+    case sessions([SMSessionSnapshot])
+    case clear
+    case failed
 }
 
 enum SMPluginAgentMenuAction {
@@ -240,6 +254,7 @@ final class SMPluginService: ObservableObject {
     private nonisolated static let sessionsURL = URL(string: "http://127.0.0.1:8420/sessions")!
     private nonisolated static let commandTimeout: TimeInterval = 2.0
     private nonisolated static let refreshStaleTimeout: TimeInterval = 20.0
+    private nonisolated static let terminalMappingRefreshInterval: TimeInterval = 300.0
     private nonisolated static let retireTimeout: TimeInterval = 30.0
     private nonisolated static let staleAnnotationRetention: TimeInterval = 60.0
     private nonisolated static let diagnosticLogURL = URL(fileURLWithPath: "/tmp/deskbar-sm-plugin.log")
@@ -258,6 +273,8 @@ final class SMPluginService: ObservableObject {
     private var refreshStartedAt: Date?
     private var refreshGeneration = 0
     private var isEnabled: Bool
+    private var lastTerminalMappingRefreshAt: Date?
+    private var lastMappedSessionIdentities: Set<SMSessionMappingIdentity> = []
     private var lastObservedAgentTabAtBySessionID: [String: Date] = [:]
     private var renamePopover: NSPopover?
 
@@ -291,6 +308,8 @@ final class SMPluginService: ObservableObject {
             refreshTask = nil
             refreshStartedAt = nil
             refreshGeneration += 1
+            lastTerminalMappingRefreshAt = nil
+            lastMappedSessionIdentities = []
             windowAnnotations = [:]
             agentTabs = []
             terminalTabCountByWindowID = [:]
@@ -331,19 +350,18 @@ final class SMPluginService: ObservableObject {
             refreshGeneration += 1
         }
 
-        guard Self.isTerminalRunning else {
-            windowAnnotations = [:]
-            agentTabs = []
-            terminalTabCountByWindowID = [:]
-            lastObservedAgentTabAtBySessionID = [:]
-            return
-        }
-
         refreshGeneration += 1
         let generation = refreshGeneration
         refreshStartedAt = Date()
+        let now = Date()
+        let mappedSessionIdentities = lastMappedSessionIdentities
+        let shouldRefreshTerminalMapping = lastTerminalMappingRefreshAt
+            .map { now.timeIntervalSince($0) >= Self.terminalMappingRefreshInterval } ?? true
         refreshTask = Task { [weak self] in
-            let snapshot = await Self.fetchAgentTabAnnotations()
+            let result = await Self.fetchRefreshResult(
+                lastMappedSessionIdentities: mappedSessionIdentities,
+                shouldRefreshTerminalMapping: shouldRefreshTerminalMapping
+            )
 
             await MainActor.run {
                 guard let self else {
@@ -363,14 +381,58 @@ final class SMPluginService: ObservableObject {
                     return
                 }
 
-                guard let snapshot else {
+                switch result {
+                case .mapped(let snapshot):
+                    self.lastTerminalMappingRefreshAt = Date()
+                    self.lastMappedSessionIdentities = snapshot.sessionMappingIdentities
+                    self.applyAgentTabFetchSnapshot(snapshot)
+                case .sessions(let sessions):
+                    self.applySessionSnapshot(sessions)
+                case .clear:
+                    self.lastTerminalMappingRefreshAt = nil
+                    self.lastMappedSessionIdentities = []
+                    self.lastObservedAgentTabAtBySessionID = [:]
+                    self.windowAnnotations = [:]
+                    self.agentTabs = []
+                    self.terminalTabCountByWindowID = [:]
+                case .failed:
                     Self.writeDiagnostic("fetch failed; keeping agentTabs=\(self.agentTabs.count)")
-                    return
                 }
-
-                self.applyAgentTabFetchSnapshot(snapshot)
             }
         }
+    }
+
+    private nonisolated static func fetchRefreshResult(
+        lastMappedSessionIdentities: Set<SMSessionMappingIdentity>,
+        shouldRefreshTerminalMapping: Bool
+    ) async -> SMPluginRefreshResult {
+        guard let sessions = await fetchSessions() else {
+            return .failed
+        }
+
+        guard !sessions.isEmpty else {
+            return .clear
+        }
+
+        let sessionMappingIdentities = mappingIdentities(for: sessions)
+        let needsTerminalMapping = shouldRefreshTerminalMapping ||
+            sessionMappingIdentities != lastMappedSessionIdentities
+        guard needsTerminalMapping else {
+            return .sessions(sessions)
+        }
+
+        let terminalIsRunning = await MainActor.run {
+            isTerminalRunning
+        }
+        guard terminalIsRunning else {
+            return .clear
+        }
+
+        guard let snapshot = await fetchAgentTabAnnotations(for: sessions) else {
+            return .failed
+        }
+
+        return .mapped(snapshot)
     }
 
     private func applyAgentTabFetchSnapshot(_ snapshot: SMAgentTabFetchSnapshot) {
@@ -420,6 +482,42 @@ final class SMPluginService: ObservableObject {
         }
 
         let selectedWindowAnnotations = Self.selectedWindowAnnotations(from: mergedAnnotations)
+        if windowAnnotations != selectedWindowAnnotations {
+            windowAnnotations = selectedWindowAnnotations
+        }
+    }
+
+    private func applySessionSnapshot(_ sessions: [SMSessionSnapshot]) {
+        guard !sessions.isEmpty else {
+            lastObservedAgentTabAtBySessionID = [:]
+            windowAnnotations = [:]
+            agentTabs = []
+            terminalTabCountByWindowID = [:]
+            return
+        }
+
+        let now = Date()
+        let liveSessionIDs = Set(sessions.map(\.id))
+        let sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        let updatedAnnotations = agentTabs.compactMap { annotation -> SMAgentWindowAnnotation? in
+            guard let session = sessionsByID[annotation.sessionID] else {
+                return nil
+            }
+
+            lastObservedAgentTabAtBySessionID[annotation.sessionID] = now
+            return Self.annotation(annotation, updatedWith: session)
+        }
+
+        lastObservedAgentTabAtBySessionID = lastObservedAgentTabAtBySessionID.filter { sessionID, _ in
+            liveSessionIDs.contains(sessionID)
+        }
+
+        let sortedAnnotations = Self.sortedAnnotations(updatedAnnotations)
+        if agentTabs != sortedAnnotations {
+            agentTabs = sortedAnnotations
+        }
+
+        let selectedWindowAnnotations = Self.selectedWindowAnnotations(from: sortedAnnotations)
         if windowAnnotations != selectedWindowAnnotations {
             windowAnnotations = selectedWindowAnnotations
         }
@@ -587,6 +685,40 @@ final class SMPluginService: ObservableObject {
         return sortedAnnotations(Array(annotationsBySessionID.values))
     }
 
+    private nonisolated static func annotation(
+        _ annotation: SMAgentWindowAnnotation,
+        updatedWith session: SMSessionSnapshot
+    ) -> SMAgentWindowAnnotation {
+        SMAgentWindowAnnotation(
+            sessionID: session.id,
+            friendlyName: session.displayName,
+            workingDirectory: session.workingDirectory,
+            provider: session.provider,
+            sessionStatus: session.status,
+            activityState: session.activityState,
+            currentTask: session.currentTask,
+            agentStatusText: session.agentStatusText,
+            lastToolName: session.lastToolName,
+            lastActionSummary: session.lastActionSummary,
+            tokensUsed: session.tokensUsed,
+            tmuxSession: session.tmuxSession,
+            terminalWindowID: annotation.terminalWindowID,
+            terminalTTY: annotation.terminalTTY,
+            terminalFrame: annotation.terminalFrame,
+            isSelectedTerminalTab: annotation.isSelectedTerminalTab
+        )
+    }
+
+    private nonisolated static func mappingIdentities(for sessions: [SMSessionSnapshot]) -> Set<SMSessionMappingIdentity> {
+        Set(sessions.map {
+            SMSessionMappingIdentity(
+                id: $0.id,
+                tmuxSession: $0.tmuxSession,
+                tmuxSocketName: $0.tmuxSocketName
+            )
+        })
+    }
+
     private nonisolated static func sortedAnnotations(
         _ annotations: [SMAgentWindowAnnotation]
     ) -> [SMAgentWindowAnnotation] {
@@ -611,15 +743,23 @@ final class SMPluginService: ObservableObject {
             return nil
         }
 
+        return await fetchAgentTabAnnotations(for: sessions)
+    }
+
+    private nonisolated static func fetchAgentTabAnnotations(
+        for sessions: [SMSessionSnapshot]
+    ) async -> SMAgentTabFetchSnapshot? {
         guard !sessions.isEmpty else {
             return SMAgentTabFetchSnapshot(
                 annotations: [],
                 liveSessionIDs: [],
-                terminalTabCountByWindowID: [:]
+                terminalTabCountByWindowID: [:],
+                sessionMappingIdentities: []
             )
         }
 
         return await Task.detached(priority: .utility) {
+            let sessionMappingIdentities = mappingIdentities(for: sessions)
             guard let terminalTabs = fetchTerminalTabs() else {
                 writeDiagnostic("terminal tabs fetch failed for sessions=\(sessions.count)")
                 return nil
@@ -655,7 +795,8 @@ final class SMPluginService: ObservableObject {
             return SMAgentTabFetchSnapshot(
                 annotations: annotations,
                 liveSessionIDs: Set(sessions.map(\.id)),
-                terminalTabCountByWindowID: terminalTabCountByWindowID
+                terminalTabCountByWindowID: terminalTabCountByWindowID,
+                sessionMappingIdentities: sessionMappingIdentities
             )
         }.value
     }

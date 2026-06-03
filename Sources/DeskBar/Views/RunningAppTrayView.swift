@@ -1,16 +1,28 @@
 import AppKit
+import ApplicationServices
 import Combine
 
 final class RunningAppTrayView: NSStackView {
+    private static let iconWidth: CGFloat = 24
+    private static let iconSpacing: CGFloat = 4
+    private static let overflowButtonWidth: CGFloat = 24
+    private static let dividerWidth: CGFloat = 1
+
     private let windowManager: WindowManager
     private let pinnedAppManager: PinnedAppManager
     private let settings: TaskbarSettings
     private let displayID: CGDirectDisplayID
     private let dividerView = NSView()
     private let iconsStackView = NSStackView()
+    private let overflowButton = NSButton()
     private let collapsedSystemResourceWidgetView: CollapsedSystemResourceWidgetView
+    private let accessibilityService = AccessibilityService()
     private var cancellables = Set<AnyCancellable>()
     private var lastContentSignature: ContentSignature?
+    private var applicationIconViews: [TrayIconView] = []
+    private var currentApplications: [TrayApplicationInfo] = []
+    private var overflowedApplications: [TrayApplicationInfo] = []
+    private var visibleApplicationCapacity: Int?
 
     var preferredWidthDidChange: (() -> Void)?
 
@@ -42,6 +54,7 @@ final class RunningAppTrayView: NSStackView {
 
         configureDividerView()
         configureIconsStackView()
+        configureOverflowButton()
         bindState()
         rebuildIcons()
     }
@@ -145,15 +158,60 @@ final class RunningAppTrayView: NSStackView {
     }
 
     func preferredContentWidth() -> CGFloat {
-        let iconWidth = Self.preferredWidth(
-            forArrangedSubviewsIn: iconsStackView,
-            spacing: iconsStackView.spacing
-        )
-        let dividerWidth = dividerView.isHidden ? 0 : Self.preferredWidth(for: dividerView)
-        let visibleComponentCount = [dividerWidth, iconWidth].filter { $0 > 0 }.count
-        let spacingWidth = CGFloat(max(visibleComponentCount - 1, 0)) * spacing
+        plannedContentWidth(visibleApplicationCapacity: visibleApplicationCapacity)
+    }
 
-        return ceil(dividerWidth + iconWidth + spacingWidth)
+    func plannedContentWidth(visibleApplicationCapacity: Int?) -> CGFloat {
+        let itemCount = plannedIconItemCount(visibleApplicationCapacity: visibleApplicationCapacity)
+        guard itemCount > 0 else {
+            return 0
+        }
+
+        let iconWidth = CGFloat(itemCount) * Self.iconWidth + CGFloat(itemCount - 1) * Self.iconSpacing
+        return ceil(Self.dividerWidth + spacing + iconWidth)
+    }
+
+    func minimumOverflowContentWidth() -> CGFloat {
+        guard !currentApplications.isEmpty else {
+            return plannedContentWidth(visibleApplicationCapacity: nil)
+        }
+
+        return plannedContentWidth(visibleApplicationCapacity: 0)
+    }
+
+    func visibleApplicationCapacity(fitting availableWidth: CGFloat) -> Int? {
+        guard !currentApplications.isEmpty else {
+            return nil
+        }
+
+        if plannedContentWidth(visibleApplicationCapacity: nil) <= availableWidth + 0.5 {
+            return nil
+        }
+
+        for capacity in stride(from: currentApplications.count - 1, through: 0, by: -1) {
+            if plannedContentWidth(visibleApplicationCapacity: capacity) <= availableWidth + 0.5 {
+                return capacity
+            }
+        }
+
+        return 0
+    }
+
+    @discardableResult
+    func setVisibleApplicationCapacity(_ capacity: Int?, notifiesPreferredWidthChange: Bool = true) -> Bool {
+        let normalizedCapacity = normalizedVisibleApplicationCapacity(capacity)
+        guard visibleApplicationCapacity != normalizedCapacity else {
+            return false
+        }
+
+        visibleApplicationCapacity = normalizedCapacity
+        updateOverflowVisibility()
+        invalidateIntrinsicContentSize()
+        needsLayout = true
+        if notifiesPreferredWidthChange {
+            preferredWidthDidChange?()
+        }
+        return true
     }
 
     private func rebuildIcons() {
@@ -176,6 +234,8 @@ final class RunningAppTrayView: NSStackView {
         }
 
         lastContentSignature = signature
+        currentApplications = applications
+        applicationIconViews.removeAll()
 
         iconsStackView.arrangedSubviews.forEach { view in
             iconsStackView.removeArrangedSubview(view)
@@ -183,20 +243,174 @@ final class RunningAppTrayView: NSStackView {
         }
 
         for application in applications {
-            iconsStackView.addArrangedSubview(
-                TrayIconView(
-                    application: application,
-                    pinnedAppManager: pinnedAppManager
-                )
+            let iconView = TrayIconView(
+                application: application,
+                pinnedAppManager: pinnedAppManager
             )
+            applicationIconViews.append(iconView)
+            iconsStackView.addArrangedSubview(iconView)
         }
+
+        iconsStackView.addArrangedSubview(overflowButton)
 
         if showsCollapsedWidget {
             iconsStackView.insertArrangedSubview(collapsedSystemResourceWidgetView, at: 0)
         }
 
-        dividerView.isHidden = iconsStackView.arrangedSubviews.isEmpty
+        visibleApplicationCapacity = normalizedVisibleApplicationCapacity(visibleApplicationCapacity)
+        updateOverflowVisibility()
         preferredWidthDidChange?()
+    }
+
+    private func configureOverflowButton() {
+        overflowButton.translatesAutoresizingMaskIntoConstraints = false
+        overflowButton.isBordered = false
+        overflowButton.bezelStyle = .regularSquare
+        overflowButton.setButtonType(.momentaryChange)
+        overflowButton.title = ">>"
+        overflowButton.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        overflowButton.contentTintColor = .secondaryLabelColor
+        overflowButton.toolTip = "More tray apps"
+        overflowButton.target = self
+        overflowButton.action = #selector(showOverflowMenu(_:))
+        overflowButton.isHidden = true
+
+        NSLayoutConstraint.activate([
+            overflowButton.widthAnchor.constraint(equalToConstant: Self.overflowButtonWidth),
+            overflowButton.heightAnchor.constraint(equalToConstant: Self.iconWidth)
+        ])
+    }
+
+    private func plannedIconItemCount(visibleApplicationCapacity: Int?) -> Int {
+        let appCount = currentApplications.count
+        let visibleAppCount = normalizedVisibleApplicationCapacity(visibleApplicationCapacity) ?? appCount
+        let hiddenAppCount = max(0, appCount - visibleAppCount)
+
+        var itemCount = 0
+        if shouldShowCollapsedSystemResourceWidget {
+            itemCount += 1
+        }
+        itemCount += visibleAppCount
+        if hiddenAppCount > 0 {
+            itemCount += 1
+        }
+        return itemCount
+    }
+
+    private func normalizedVisibleApplicationCapacity(_ capacity: Int?) -> Int? {
+        guard let capacity else {
+            return nil
+        }
+
+        let appCount = currentApplications.count
+        guard appCount > 0 else {
+            return nil
+        }
+
+        let clampedCapacity = min(max(capacity, 0), appCount)
+        return clampedCapacity >= appCount ? nil : clampedCapacity
+    }
+
+    private func updateOverflowVisibility() {
+        let visibleAppCount = visibleApplicationCapacity ?? applicationIconViews.count
+        for (index, iconView) in applicationIconViews.enumerated() {
+            iconView.isHidden = index >= visibleAppCount
+        }
+
+        overflowedApplications = Array(currentApplications.dropFirst(visibleAppCount))
+        overflowButton.isHidden = overflowedApplications.isEmpty
+        dividerView.isHidden = plannedIconItemCount(visibleApplicationCapacity: visibleApplicationCapacity) == 0
+    }
+
+    @objc
+    private func showOverflowMenu(_ sender: NSButton) {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        for application in overflowedApplications {
+            let item = NSMenuItem(
+                title: application.name,
+                action: #selector(activateOverflowApplication(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = application
+            item.image = application.icon?.scaled(to: NSSize(width: 16, height: 16))
+            menu.addItem(item)
+        }
+
+        if overflowedApplications.isEmpty {
+            let item = NSMenuItem(title: "No hidden tray apps", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+
+        menu.popUp(
+            positioning: nil,
+            at: NSPoint(x: 0, y: sender.bounds.height + 2),
+            in: sender
+        )
+    }
+
+    @objc
+    private func activateOverflowApplication(_ sender: NSMenuItem) {
+        guard let application = sender.representedObject as? TrayApplicationInfo else {
+            return
+        }
+
+        switch TrayActivationPlanner.action(
+            bundleIdentifier: application.bundleIdentifier,
+            hasAnyWindows: hasAnyApplicationWindows(for: application)
+        ) {
+        case .activateApplication:
+            activateOrReopenApplication(application, shouldReopen: false)
+        case .reopenApplication:
+            activateOrReopenApplication(application, shouldReopen: true)
+        case .openFinderWindow:
+            LauncherApplicationActivator.openFinderWindow()
+        }
+    }
+
+    private func activateOrReopenApplication(_ application: TrayApplicationInfo, shouldReopen: Bool) {
+        guard let bundleIdentifier = application.bundleIdentifier else {
+            application.runningApplication?.unhide()
+            application.runningApplication?.activate(options: .activateAllWindows)
+            return
+        }
+
+        if let runningApplication = application.runningApplication {
+            LauncherApplicationActivator.activate(
+                runningApplication,
+                bundleIdentifier: bundleIdentifier,
+                applicationURL: application.bundleURL,
+                shouldReopen: shouldReopen
+            )
+        } else if shouldReopen {
+            LauncherApplicationActivator.reopen(
+                bundleIdentifier: bundleIdentifier,
+                applicationURL: application.bundleURL
+            )
+        } else {
+            LauncherApplicationActivator.launch(
+                bundleIdentifier: bundleIdentifier,
+                applicationURL: application.bundleURL
+            )
+        }
+    }
+
+    private func hasAnyApplicationWindows(for application: TrayApplicationInfo) -> Bool? {
+        guard let runningApplication = application.runningApplication else {
+            return nil
+        }
+
+        if AXIsProcessTrusted() {
+            let windows = accessibilityService.enumerateWindows(for: runningApplication)
+            if !windows.isEmpty {
+                return true
+            }
+        }
+
+        return LauncherApplicationActivator.hasCGWindows(for: runningApplication)
     }
 
     private var localTrayApps: [TrayApplicationInfo] {
@@ -227,24 +441,6 @@ final class RunningAppTrayView: NSStackView {
         return pinnedDisplayID == displayID
     }
 
-    private static func preferredWidth(forArrangedSubviewsIn stackView: NSStackView, spacing: CGFloat) -> CGFloat {
-        let visibleSubviews = stackView.arrangedSubviews.filter { !$0.isHidden }
-        guard !visibleSubviews.isEmpty else {
-            return 0
-        }
-
-        let contentWidth = visibleSubviews.map(preferredWidth(for:)).reduce(0, +)
-        return contentWidth + CGFloat(visibleSubviews.count - 1) * spacing
-    }
-
-    private static func preferredWidth(for view: NSView) -> CGFloat {
-        let intrinsicWidth = view.intrinsicContentSize.width
-        if intrinsicWidth != NSView.noIntrinsicMetric, intrinsicWidth > 0 {
-            return intrinsicWidth
-        }
-
-        return max(0, view.fittingSize.width)
-    }
 }
 
 private struct ContentSignature: Equatable {
