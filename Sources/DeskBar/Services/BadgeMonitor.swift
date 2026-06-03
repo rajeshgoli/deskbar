@@ -5,7 +5,7 @@ import Combine
 final class BadgeMonitor: ObservableObject {
     @Published var appBadges: [String: Bool] = [:]
 
-    private let pollInterval: TimeInterval = 5.0
+    private let pollInterval: TimeInterval = 30.0
     private var observers: [NSObjectProtocol] = []
     private var pollTimer: Timer?
 
@@ -70,6 +70,7 @@ final class BadgeMonitor: ObservableObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
+        pollTimer?.tolerance = 10.0
     }
 
     private func dockBadgeStates(for applications: [NSRunningApplication]) -> [String: Bool] {

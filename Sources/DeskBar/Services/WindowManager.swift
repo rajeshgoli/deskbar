@@ -29,6 +29,8 @@ final class WindowManager: ObservableObject {
     private var promotionWorkItems: [String: DispatchWorkItem] = [:]
     private var windowOrder: [String] = []
     private var publishedWindowState = PublishedWindowState(windows: [], boundsByWindowID: [:])
+    private var trayCandidateInfosByKey: [String: TrayApplicationInfo] = [:]
+    private var hasTrayCandidateInfoCache = false
 
     init(
         accessibilityService: AccessibilityService = AccessibilityService(),
@@ -45,7 +47,7 @@ final class WindowManager: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.refresh()
+            self?.refresh(forceDerivedState: true)
         }
         pinnedAppManager.$pinnedApps
             .receive(on: RunLoop.main)
@@ -54,7 +56,7 @@ final class WindowManager: ObservableObject {
             }
             .store(in: &cancellables)
         startPollTimer()
-        refresh()
+        refresh(forceDerivedState: true)
     }
 
     deinit {
@@ -68,11 +70,11 @@ final class WindowManager: ObservableObject {
 
     func refreshDebounced() {
         refreshDebouncer.debounce { [weak self] in
-            self?.refresh()
+            self?.refresh(forceDerivedState: true)
         }
     }
 
-    func refresh() {
+    func refresh(forceDerivedState: Bool = true) {
         let runningApplications = NSWorkspace.shared.runningApplications
         let allApplicationsByPID = Dictionary(uniqueKeysWithValues: runningApplications.map { ($0.processIdentifier, $0) })
         let regularApplications = runningApplications.filter {
@@ -175,7 +177,7 @@ final class WindowManager: ObservableObject {
 
         authoritative = nextAuthoritative
         authoritativeBounds = nextAuthoritativeBounds
-        publishWindows(currentWindowOrder: currentWindowOrder)
+        publishWindows(currentWindowOrder: currentWindowOrder, forceDerivedState: forceDerivedState)
 
         for axWindow in allAXWindows {
             adjustWindowForTaskbar(axWindow)
@@ -261,7 +263,11 @@ final class WindowManager: ObservableObject {
         let scopedWindows = windows(onDisplay: displayBounds)
         let visibleWindowPIDs = Self.visibleWindowPIDs(from: scopedWindows)
         let visibleWindowBundleIdentifiers = Self.visibleWindowBundleIdentifiers(from: scopedWindows)
-        let candidatesByKey = trayApplicationInfoByCandidateKey()
+        if !hasTrayCandidateInfoCache {
+            trayCandidateInfosByKey = trayApplicationInfoByCandidateKey()
+            hasTrayCandidateInfoCache = true
+        }
+        let candidatesByKey = trayCandidateInfosByKey
         let trayCandidates = Self.trayApplicationCandidates(
             from: candidatesByKey.values.map {
                 RunningApplicationCandidate(
@@ -321,9 +327,10 @@ final class WindowManager: ObservableObject {
     }
 
     private func startPollTimer() {
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            self?.refresh()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 15.0, repeats: true) { [weak self] _ in
+            self?.refresh(forceDerivedState: false)
         }
+        pollTimer?.tolerance = 5.0
     }
 
     private func fetchCGWindowSnapshots(
@@ -597,7 +604,7 @@ final class WindowManager: ObservableObject {
         )
     }
 
-    private func publishWindows(currentWindowOrder: [String]? = nil) {
+    private func publishWindows(currentWindowOrder: [String]? = nil, forceDerivedState: Bool = true) {
         let combined = (Array(authoritative.values) + Array(provisional.values)).filter { window in
             !isBlacklisted(bundleIdentifier: window.bundleIdentifier)
         }
@@ -614,13 +621,16 @@ final class WindowManager: ObservableObject {
             boundsByWindowID: boundsByWindowID(for: nextWindows)
         )
 
+        let didChangePublishedWindowState = nextPublishedWindowState != publishedWindowState
         windowOrder = nextWindowOrder
-        if nextPublishedWindowState != publishedWindowState {
+        if didChangePublishedWindowState {
             publishedWindowState = nextPublishedWindowState
             windows = nextWindows
         }
 
-        publishDerivedState()
+        if didChangePublishedWindowState || forceDerivedState {
+            publishDerivedState()
+        }
     }
 
     private func publishDerivedState() {
@@ -632,6 +642,8 @@ final class WindowManager: ObservableObject {
         }
 
         let candidatesByKey = trayApplicationInfoByCandidateKey()
+        trayCandidateInfosByKey = candidatesByKey
+        hasTrayCandidateInfoCache = true
         let trayCandidates = Self.trayApplicationCandidates(
             from: candidatesByKey.values.map {
                 RunningApplicationCandidate(
