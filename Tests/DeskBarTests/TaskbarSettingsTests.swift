@@ -30,6 +30,7 @@ struct TaskbarSettingsTests {
         #expect(settings.enableWindowSwitcher == false)
         #expect(settings.enableBareCommandLauncher == false)
         #expect(settings.appsLauncherShortcut == .controlOptionReturn)
+        #expect(settings.animateSessionManagerActivity == false)
     }
 
     @Test
