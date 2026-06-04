@@ -963,6 +963,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
 
     private func updateWidthConstraint() {
         maxWidthConstraint?.constant = effectiveTaskWidth
+        updateTaskButtonPluginActionButton()
         updateTitleVisibility()
         invalidateIntrinsicContentSize()
         needsLayout = true

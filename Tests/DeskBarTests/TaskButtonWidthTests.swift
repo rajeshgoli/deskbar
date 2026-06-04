@@ -54,4 +54,61 @@ struct TaskButtonWidthTests {
         #expect(TaskButtonView.minimumAdaptiveTaskWidth == 32)
         #expect(TaskButtonView.minimumAdaptivePluginActionTaskWidth == 32)
     }
+
+    @MainActor
+    @Test
+    func adaptiveWidthCapHidesInlinePluginActionButton() {
+        let suiteName = "TaskButtonWidthTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let settings = TaskbarSettings(defaults: defaults)
+        let menuConfiguration = TaskButtonPluginMenuConfiguration(
+            buttonTitle: "sm",
+            tintColor: .systemGreen,
+            showsActionButton: true,
+            menuProvider: { NSMenu() }
+        )
+        let button = TaskButtonView(
+            windowInfo: WindowInfo(
+                pid: 123,
+                cgWindowID: 456,
+                appName: "Session Manager",
+                title: "Active session",
+                icon: nil,
+                bundleIdentifier: "com.example.session"
+            ),
+            isActive: false,
+            hasBadge: false,
+            isAccessibilityAvailable: false,
+            runtimeState: AppRuntimeState(),
+            showsActivityOverlay: false,
+            settings: settings,
+            blacklistManager: BlacklistManager(),
+            pluginMenuConfiguration: menuConfiguration,
+            activationHandler: { _ in }
+        )
+        let pluginActionButton = findPluginActionButton(in: button)
+
+        #expect(pluginActionButton?.isHidden == false)
+
+        button.setWidthMode(usesAdaptiveWidth: true, widthCap: 40)
+
+        #expect(pluginActionButton?.isHidden == true)
+    }
+
+    @MainActor
+    private func findPluginActionButton(in view: NSView) -> NSButton? {
+        if let button = view as? NSButton,
+           button.toolTip == "Session Manager actions" {
+            return button
+        }
+
+        for subview in view.subviews {
+            if let button = findPluginActionButton(in: subview) {
+                return button
+            }
+        }
+
+        return nil
+    }
 }
