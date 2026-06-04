@@ -84,6 +84,7 @@ struct SMAgentWindowAnnotation: Equatable {
     let sessionID: String
     let friendlyName: String
     let workingDirectory: String
+    let node: String?
     let provider: String
     let sessionStatus: String
     let activityState: SMAgentActivityState
@@ -97,12 +98,17 @@ struct SMAgentWindowAnnotation: Equatable {
     let terminalTTY: String
     let terminalFrame: CGRect?
     let isSelectedTerminalTab: Bool
+
+    var isLocalTerminalBacked: Bool {
+        terminalWindowID != 0 && !terminalTTY.isEmpty
+    }
 }
 
 struct SMSessionSnapshot: Equatable {
     let id: String
     let friendlyName: String?
     let workingDirectory: String
+    let node: String?
     let provider: String
     let status: String
     let activityState: SMAgentActivityState
@@ -186,6 +192,9 @@ enum SMPluginAgentMenuFactory {
 
         menu.addItem(metadataItem(annotation.friendlyName))
         menu.addItem(metadataItem("\(annotation.activityState.displayName) - \(annotation.provider) - \(annotation.sessionStatus)"))
+        if let node = trimmed(annotation.node), node != "primary" {
+            menu.addItem(metadataItem("Node: \(node)"))
+        }
         if let agentStatusText = trimmed(annotation.agentStatusText) {
             menu.addItem(metadataItem(agentStatusText))
         } else if let currentTask = trimmed(annotation.currentTask) {
@@ -203,10 +212,14 @@ enum SMPluginAgentMenuFactory {
         menu.addItem(.separator())
         menu.addItem(item("Copy SM ID", .copySessionID, annotation, target, action))
         menu.addItem(item("Rename", .rename, annotation, target, action))
-        menu.addItem(item("New Terminal Like This", .openTerminalLikeThis, annotation, target, action))
+        if annotation.isLocalTerminalBacked {
+            menu.addItem(item("New Terminal Like This", .openTerminalLikeThis, annotation, target, action))
+        }
         menu.addItem(.separator())
         menu.addItem(item("Retire", .retire, annotation, target, action))
-        menu.addItem(item("Retire and Close", .retireAndClose, annotation, target, action))
+        if annotation.isLocalTerminalBacked {
+            menu.addItem(item("Retire and Close", .retireAndClose, annotation, target, action))
+        }
         return menu
     }
 
@@ -251,7 +264,6 @@ enum SMPluginAgentMenuFactory {
 @MainActor
 final class SMPluginService: ObservableObject {
     nonisolated static let terminalBundleIdentifier = "com.apple.Terminal"
-    private nonisolated static let sessionsURL = URL(string: "http://127.0.0.1:8420/sessions")!
     private nonisolated static let commandTimeout: TimeInterval = 2.0
     private nonisolated static let refreshStaleTimeout: TimeInterval = 20.0
     private nonisolated static let terminalMappingRefreshInterval: TimeInterval = 300.0
@@ -496,7 +508,6 @@ final class SMPluginService: ObservableObject {
             return
         }
 
-        let now = Date()
         let liveSessionIDs = Set(sessions.map(\.id))
         let sessionsByID = Dictionary(preservingFirstValues: sessions.map { ($0.id, $0) })
         let updatedAnnotations = agentTabs.compactMap { annotation -> SMAgentWindowAnnotation? in
@@ -504,7 +515,6 @@ final class SMPluginService: ObservableObject {
                 return nil
             }
 
-            lastObservedAgentTabAtBySessionID[annotation.sessionID] = now
             return Self.annotation(annotation, updatedWith: session)
         }
 
@@ -525,6 +535,10 @@ final class SMPluginService: ObservableObject {
 
     func activate(annotation: SMAgentWindowAnnotation) {
         Task.detached(priority: .userInitiated) {
+            guard annotation.isLocalTerminalBacked else {
+                return
+            }
+
             Self.activateTerminalTab(
                 windowID: annotation.terminalWindowID,
                 tty: annotation.terminalTTY
@@ -534,6 +548,10 @@ final class SMPluginService: ObservableObject {
 
     func openTerminalLike(annotation: SMAgentWindowAnnotation, inWorkingDirectory: Bool) {
         Task.detached(priority: .userInitiated) {
+            guard annotation.isLocalTerminalBacked else {
+                return
+            }
+
             Self.openTerminalLike(
                 frame: annotation.terminalFrame,
                 workingDirectory: annotation.workingDirectory,
@@ -631,6 +649,10 @@ final class SMPluginService: ObservableObject {
                 return
             }
 
+            guard annotation.isLocalTerminalBacked else {
+                return
+            }
+
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             Self.closeTerminalTab(
                 windowID: annotation.terminalWindowID,
@@ -663,6 +685,7 @@ final class SMPluginService: ObservableObject {
                 sessionID: session.id,
                 friendlyName: session.displayName,
                 workingDirectory: session.workingDirectory,
+                node: session.node,
                 provider: session.provider,
                 sessionStatus: session.status,
                 activityState: session.activityState,
@@ -693,6 +716,7 @@ final class SMPluginService: ObservableObject {
             sessionID: session.id,
             friendlyName: session.displayName,
             workingDirectory: session.workingDirectory,
+            node: session.node,
             provider: session.provider,
             sessionStatus: session.status,
             activityState: session.activityState,
@@ -723,6 +747,10 @@ final class SMPluginService: ObservableObject {
         _ annotations: [SMAgentWindowAnnotation]
     ) -> [SMAgentWindowAnnotation] {
         annotations.sorted {
+            if $0.isLocalTerminalBacked != $1.isLocalTerminalBacked {
+                return $0.isLocalTerminalBacked
+            }
+
             if $0.terminalWindowID != $1.terminalWindowID {
                 return $0.terminalWindowID < $1.terminalWindowID
             }
@@ -773,13 +801,18 @@ final class SMPluginService: ObservableObject {
 
             let tmuxSessionNames = Set(sessions.map(\.tmuxSession))
             let listedClients = fetchTmuxClients(for: sessions)
-            var clients = listedClients ?? []
-            if clients.isEmpty {
-                clients = fetchTmuxClientsFromTerminalTabs(
-                    terminalTabs,
-                    matching: tmuxSessionNames
-                )
+            var clientsByTTY = Dictionary(
+                preservingFirstValues: (listedClients ?? []).map { ($0.tty, $0) }
+            )
+            let terminalTabClients = fetchTmuxClientsFromTerminalTabs(
+                terminalTabs,
+                matching: tmuxSessionNames,
+                shouldWriteEmptyDiagnostic: clientsByTTY.isEmpty
+            )
+            for client in terminalTabClients {
+                clientsByTTY[client.tty] = client
             }
+            let clients = clientsByTTY.values.sorted { $0.tty < $1.tty }
 
             guard !clients.isEmpty else {
                 let reason = listedClients == nil ? "fetch failed" : "empty"
@@ -813,6 +846,10 @@ final class SMPluginService: ObservableObject {
     }
 
     private nonisolated static func fetchSessions() async -> [SMSessionSnapshot]? {
+        guard let sessionsURL = SMClientConfiguration.apiURL(path: "/sessions") else {
+            return nil
+        }
+
         var request = URLRequest(url: sessionsURL)
         request.timeoutInterval = 0.75
 
@@ -828,6 +865,7 @@ final class SMPluginService: ObservableObject {
                     id: session.id,
                     friendlyName: session.friendlyName,
                     workingDirectory: session.workingDirectory,
+                    node: session.node,
                     provider: session.provider ?? "sm",
                     status: session.status,
                     activityState: SMAgentActivityState(rawValue: session.activityState),
@@ -964,7 +1002,8 @@ final class SMPluginService: ObservableObject {
 
     private nonisolated static func fetchTmuxClientsFromTerminalTabs(
         _ terminalTabs: [SMTerminalTabSnapshot],
-        matching tmuxSessionNames: Set<String>
+        matching tmuxSessionNames: Set<String>,
+        shouldWriteEmptyDiagnostic: Bool = true
     ) -> [SMTmuxClientSnapshot] {
         guard !tmuxSessionNames.isEmpty else {
             return []
@@ -1009,7 +1048,7 @@ final class SMPluginService: ObservableObject {
             }
         }
 
-        if clientsByTTY.isEmpty {
+        if clientsByTTY.isEmpty, shouldWriteEmptyDiagnostic {
             writeDiagnostic(
                 "tty fallback no matches tabs=\(terminalTabs.count) psFailures=\(psFailureCount) commandLines=\(commandLineCount) tmuxLines=\(tmuxLineCount)"
             )
@@ -1018,8 +1057,10 @@ final class SMPluginService: ObservableObject {
         return clientsByTTY.values.sorted { $0.tty < $1.tty }
     }
 
-    private nonisolated static func tmuxAttachTarget(in command: String) -> String? {
-        let tokens = command.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+    nonisolated static func tmuxAttachTarget(in command: String) -> String? {
+        let tokens = command
+            .split(whereSeparator: { $0.isWhitespace })
+            .map { cleanShellToken(String($0)) }
         guard tokens.contains(where: { $0 == "tmux" || $0.hasSuffix("/tmux") }) else {
             return nil
         }
@@ -1037,15 +1078,19 @@ final class SMPluginService: ObservableObject {
             }
 
             if token == "-t", tokens.indices.contains(index + 1) {
-                return tokens[index + 1]
+                return cleanShellToken(tokens[index + 1])
             }
 
             if token.hasPrefix("-t"), token.count > 2 {
-                return String(token.dropFirst(2))
+                return cleanShellToken(String(token.dropFirst(2)))
             }
         }
 
         return nil
+    }
+
+    private nonisolated static func cleanShellToken(_ token: String) -> String {
+        token.trimmingCharacters(in: CharacterSet(charactersIn: "'\";"))
     }
 
     private nonisolated static func smExecutablePath() -> String? {
@@ -1242,7 +1287,7 @@ final class SMPluginService: ObservableObject {
     ) async -> (success: Bool, errorMessage: String?) {
         guard
             let encodedSessionID = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-            let renameURL = URL(string: "http://127.0.0.1:8420/sessions/\(encodedSessionID)")
+            let renameURL = SMClientConfiguration.apiURL(path: "/sessions/\(encodedSessionID)")
         else {
             return (false, "Invalid session id.")
         }
@@ -1303,7 +1348,7 @@ final class SMPluginService: ObservableObject {
     private nonisolated static func retireAgentViaAPI(sessionID: String) async -> Bool {
         guard
             let encodedSessionID = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-            let retireURL = URL(string: "http://127.0.0.1:8420/sessions/\(encodedSessionID)/kill")
+            let retireURL = SMClientConfiguration.apiURL(path: "/sessions/\(encodedSessionID)/kill")
         else {
             return false
         }
@@ -1765,6 +1810,7 @@ private struct SMAPISession: Decodable {
     let id: String
     let friendlyName: String?
     let workingDirectory: String
+    let node: String?
     let provider: String?
     let status: String
     let activityState: String
@@ -1780,6 +1826,7 @@ private struct SMAPISession: Decodable {
         case id
         case friendlyName = "friendly_name"
         case workingDirectory = "working_dir"
+        case node
         case provider
         case status
         case activityState = "activity_state"

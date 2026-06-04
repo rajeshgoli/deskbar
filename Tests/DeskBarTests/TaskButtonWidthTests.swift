@@ -166,6 +166,7 @@ struct TaskButtonWidthTests {
             sessionID: "session-123",
             friendlyName: "Session 123",
             workingDirectory: "/tmp",
+            node: "macbook",
             provider: "codex",
             sessionStatus: "running",
             activityState: .working,
