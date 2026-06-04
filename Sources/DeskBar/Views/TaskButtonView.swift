@@ -33,8 +33,9 @@ struct TaskButtonPluginMenuConfiguration {
 final class TaskButtonView: NSView, NSDraggingSource {
     static let minimumTaskWidth: CGFloat = 56
     static let minimumPluginActionTaskWidth: CGFloat = 88
-    static let minimumAdaptiveTaskWidth: CGFloat = 40
-    static let minimumAdaptivePluginActionTaskWidth: CGFloat = 72
+    static let minimumAdaptiveTaskWidth: CGFloat = 32
+    static let minimumAdaptivePluginActionTaskWidth: CGFloat = 32
+    private static let minimumInlinePluginActionTaskWidth: CGFloat = 72
     private static var activeHoverView: TaskButtonView?
     static let dragPasteboardType = NSPasteboard.PasteboardType("com.deskbar.task")
 
@@ -206,6 +207,10 @@ final class TaskButtonView: NSView, NSDraggingSource {
 
     private var showsPluginActionButton: Bool {
         pluginMenuConfiguration?.showsActionButton == true
+    }
+
+    private var showsInlinePluginActionButton: Bool {
+        showsPluginActionButton && effectiveTaskWidth >= Self.minimumInlinePluginActionTaskWidth
     }
 
     private var hasPluginMenu: Bool {
@@ -786,7 +791,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         dropIndicatorView.isHidden = false
     }
 
-    private func makeContextMenu() -> NSMenu {
+    func makeContextMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
@@ -841,7 +846,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
     }
 
     private func configurePluginMenuPresentationView(_ menu: NSMenu) {
-        let presentationView: NSView = showsPluginActionButton ? pluginActionButton : self
+        let presentationView: NSView = showsInlinePluginActionButton ? pluginActionButton : self
         for item in menu.items {
             if let command = item.representedObject as? SMPluginAgentMenuCommand {
                 command.presentationView = presentationView
@@ -907,11 +912,12 @@ final class TaskButtonView: NSView, NSDraggingSource {
     }
 
     private func updateTaskButtonPluginActionButton() {
-        pluginActionButton.isHidden = !showsPluginActionButton
-        statusDefaultLeadingConstraint?.isActive = !showsPluginActionButton
-        statusSMLeadingConstraint?.isActive = showsPluginActionButton
-        iconDefaultLeadingConstraint?.isActive = !showsPluginActionButton
-        iconSMLeadingConstraint?.isActive = showsPluginActionButton
+        let shouldShowInlinePluginActionButton = showsInlinePluginActionButton
+        pluginActionButton.isHidden = !shouldShowInlinePluginActionButton
+        statusDefaultLeadingConstraint?.isActive = !shouldShowInlinePluginActionButton
+        statusSMLeadingConstraint?.isActive = shouldShowInlinePluginActionButton
+        iconDefaultLeadingConstraint?.isActive = !shouldShowInlinePluginActionButton
+        iconSMLeadingConstraint?.isActive = shouldShowInlinePluginActionButton
         pluginActionButton.title = pluginMenuConfiguration?.buttonTitle ?? ""
         pluginActionButton.contentTintColor = pluginMenuConfiguration?.tintColor ?? .secondaryLabelColor
         pluginActionButton.activityColor = pluginMenuConfiguration?.tintColor ?? .secondaryLabelColor
@@ -957,6 +963,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
 
     private func updateWidthConstraint() {
         maxWidthConstraint?.constant = effectiveTaskWidth
+        updateTaskButtonPluginActionButton()
         updateTitleVisibility()
         invalidateIntrinsicContentSize()
         needsLayout = true
