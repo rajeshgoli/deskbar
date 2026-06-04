@@ -27,8 +27,8 @@ struct TaskbarSettingsTests {
         #expect(settings.systemResourceWidgetCollapsed == false)
         #expect(settings.systemResourceWidgetPinnedDisplayID == nil)
         #expect(settings.layoutMode == .fullWidth)
-        #expect(settings.enableWindowSwitcher)
-        #expect(settings.enableBareCommandLauncher)
+        #expect(settings.enableWindowSwitcher == false)
+        #expect(settings.enableBareCommandLauncher == false)
         #expect(settings.appsLauncherShortcut == .controlOptionReturn)
     }
 
