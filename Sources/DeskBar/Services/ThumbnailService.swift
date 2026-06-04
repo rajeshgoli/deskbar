@@ -54,7 +54,7 @@ final class ThumbnailService: ObservableObject {
             return cachedLegacyThumbnail(windowID: windowID, size: size)
         }
 
-        let windowsByID = Dictionary(uniqueKeysWithValues: content.windows.map { ($0.windowID, $0) })
+        let windowsByID = Dictionary(preservingFirstValues: content.windows.map { ($0.windowID, $0) })
         return await captureThumbnail(
             windowID: windowID,
             size: size,
@@ -97,7 +97,7 @@ final class ThumbnailService: ObservableObject {
 
         return ThumbnailCaptureSession(
             thumbnailService: self,
-            screenCaptureWindowsByID: Dictionary(uniqueKeysWithValues: content.windows.map { ($0.windowID, $0) })
+            screenCaptureWindowsByID: Dictionary(preservingFirstValues: content.windows.map { ($0.windowID, $0) })
         )
     }
 

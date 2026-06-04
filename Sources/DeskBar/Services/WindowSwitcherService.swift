@@ -127,7 +127,7 @@ final class WindowSwitcherService {
             $0.cgWindowID != nil && !$0.isMinimized && !$0.isHidden
         }
         let windowsByCGID = Dictionary(
-            uniqueKeysWithValues: candidates.compactMap { window -> (CGWindowID, WindowInfo)? in
+            preservingFirstValues: candidates.compactMap { window -> (CGWindowID, WindowInfo)? in
                 guard let cgWindowID = window.cgWindowID else {
                     return nil
                 }

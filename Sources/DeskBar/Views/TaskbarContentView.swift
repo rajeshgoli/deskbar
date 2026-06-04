@@ -35,6 +35,8 @@ final class TaskbarContentView: NSView {
     private let taskZoneItemSpacing: CGFloat = 8
     private let taskZoneGroupSpacing: CGFloat = 12
     private let compactTaskZoneSpacerWidth: CGFloat = 8
+    static let compactOuterInsetContentWidthThreshold: CGFloat = 2200
+    static let compactTrailingOverflowGuardWidth: CGFloat = 16
     private let regularZoneEdgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
     private let compactZoneEdgeInsets = NSEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
 
@@ -42,6 +44,7 @@ final class TaskbarContentView: NSView {
     private let thumbnailService: ThumbnailService?
     private let openSettingsHandler: () -> Void
     private let taskZoneContainer = NSView()
+    private var taskZoneContainerWidthConstraint: NSLayoutConstraint?
     private var cancellables = Set<AnyCancellable>()
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
@@ -59,6 +62,7 @@ final class TaskbarContentView: NSView {
     private var lastAppliedTaskWidthCap: CGFloat?
     private var lastAppliedTrayVisibleApplicationCapacity: Int?
     private var lastAppliedUsesCompactOuterInsets = false
+    private var lastAppliedTaskZoneContainerWidth: CGFloat?
     private var responsiveWidthUpdateScheduled = false
     private var lastResponsiveLayoutContentWidth: CGFloat?
     private var isActivityModeActive = false
@@ -291,7 +295,7 @@ final class TaskbarContentView: NSView {
 
     private func configureLayout() {
         rootStackView.orientation = .vertical
-        rootStackView.alignment = .leading
+        rootStackView.alignment = .width
         rootStackView.distribution = .fill
         rootStackView.spacing = 0
         rootStackView.translatesAutoresizingMaskIntoConstraints = false
@@ -342,6 +346,9 @@ final class TaskbarContentView: NSView {
         taskZoneContainer.layer?.masksToBounds = true
         taskZoneContainer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         taskZoneContainer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let taskZoneContainerWidthConstraint = taskZoneContainer.widthAnchor.constraint(equalToConstant: 0)
+        taskZoneContainerWidthConstraint.isActive = true
+        self.taskZoneContainerWidthConstraint = taskZoneContainerWidthConstraint
 
         taskZoneLayoutStackView.orientation = .horizontal
         taskZoneLayoutStackView.alignment = .centerY
@@ -373,8 +380,13 @@ final class TaskbarContentView: NSView {
         clusterSpacerEqualWidthConstraint?.isActive = true
         taskZoneLayoutStackView.setCustomSpacing(0, after: clusterLeadingSpacerView)
 
+        let taskZoneLayoutLeadingConstraint = taskZoneLayoutStackView.leadingAnchor.constraint(
+            equalTo: taskZoneContainer.leadingAnchor
+        )
+        taskZoneLayoutLeadingConstraint.priority = .defaultHigh
+
         NSLayoutConstraint.activate([
-            taskZoneLayoutStackView.leadingAnchor.constraint(equalTo: taskZoneContainer.leadingAnchor),
+            taskZoneLayoutLeadingConstraint,
             taskZoneLayoutStackView.trailingAnchor.constraint(equalTo: taskZoneContainer.trailingAnchor),
             taskZoneLayoutStackView.topAnchor.constraint(equalTo: taskZoneContainer.topAnchor),
             taskZoneLayoutStackView.bottomAnchor.constraint(equalTo: taskZoneContainer.bottomAnchor),
@@ -683,7 +695,7 @@ final class TaskbarContentView: NSView {
             $0.bundleIdentifier == SMPluginService.terminalBundleIdentifier
         }
         let terminalWindowsByID = Dictionary(
-            uniqueKeysWithValues: terminalWindows.compactMap { window -> (CGWindowID, WindowInfo)? in
+            preservingFirstValues: terminalWindows.compactMap { window -> (CGWindowID, WindowInfo)? in
                 guard
                     let cgWindowID = window.cgWindowID
                 else {
@@ -986,7 +998,7 @@ final class TaskbarContentView: NSView {
         ungroupedTaskOrderState.reconcile(currentIDs: ids)
 
         let orderedIDs = ungroupedTaskOrderState.arrangedIDs(for: ids)
-        let windowsByID = Dictionary(uniqueKeysWithValues: windows.map { (ungroupedTaskItemID(for: $0), $0) })
+        let windowsByID = Dictionary(preservingFirstValues: windows.map { (ungroupedTaskItemID(for: $0), $0) })
         return orderedIDs.compactMap { windowsByID[$0] }
     }
 
@@ -1003,7 +1015,7 @@ final class TaskbarContentView: NSView {
         groupedTaskOrderState.reconcile(currentIDs: ids)
 
         let orderedIDs = groupedTaskOrderState.arrangedIDs(for: ids)
-        let itemsByID = Dictionary(uniqueKeysWithValues: items.map { (groupedTaskItemID(for: $0), $0) })
+        let itemsByID = Dictionary(preservingFirstValues: items.map { (groupedTaskItemID(for: $0), $0) })
         return orderedIDs.compactMap { itemsByID[$0] }
     }
 
@@ -1482,11 +1494,22 @@ final class TaskbarContentView: NSView {
             zoneEdgeInsetsWidth(regularZoneEdgeInsets)
         let fullPreferredWidth = fixedZoneWidth + fullMeasurement.preferredWidth
         let usesAdaptiveTaskLayout = fullPreferredWidth > contentWidth + 0.5
-        let usesCompactOuterInsets = usesAdaptiveTaskLayout
+        let usesCompactOuterInsets = Self.shouldUseCompactOuterInsets(
+            contentWidth: contentWidth,
+            usesAdaptiveTaskLayout: usesAdaptiveTaskLayout
+        )
+        let usesTaskZoneEdgeSpacers = Self.shouldShowTaskZoneEdgeSpacers(
+            contentWidth: contentWidth,
+            usesAdaptiveTaskLayout: usesAdaptiveTaskLayout
+        )
+        let layoutBudgetContentWidth = Self.layoutBudgetContentWidth(
+            contentWidth: contentWidth,
+            usesCompactOuterInsets: usesCompactOuterInsets
+        )
 
         let measurement = taskZoneWidthMeasurement(
             usesAdaptiveTaskWidth: usesAdaptiveTaskLayout,
-            includesEdgeSpacers: !usesAdaptiveTaskLayout
+            includesEdgeSpacers: usesTaskZoneEdgeSpacers
         )
         let taskMinimumWidth = measurement.fixedWidth + measurement.taskButtonItems.reduce(0) {
             $0 + $1.minimumWidth
@@ -1499,7 +1522,7 @@ final class TaskbarContentView: NSView {
                 launcherZoneView.preferredContentWidth() +
                 systemResourceWidgetView.preferredContentWidth() +
                 zoneEdgeInsetsWidth(compactZoneEdgeInsets)
-            let availableTrayWidth = contentWidth - nonTrayFixedWidth - taskMinimumWidth
+            let availableTrayWidth = layoutBudgetContentWidth - nonTrayFixedWidth - taskMinimumWidth
             trayVisibleApplicationCapacity = runningAppTrayView.visibleApplicationCapacity(
                 fitting: availableTrayWidth
             )
@@ -1510,14 +1533,19 @@ final class TaskbarContentView: NSView {
                 )
         } else {
             trayVisibleApplicationCapacity = nil
-            effectiveFixedZoneWidth = fixedZoneWidth
+            effectiveFixedZoneWidth =
+                launcherZoneView.preferredContentWidth() +
+                systemResourceWidgetView.preferredContentWidth() +
+                runningAppTrayView.plannedContentWidth(visibleApplicationCapacity: nil) +
+                zoneEdgeInsetsWidth(usesCompactOuterInsets ? compactZoneEdgeInsets : regularZoneEdgeInsets)
         }
 
         let widthCap = TaskbarWidthPlanner.uniformWidthCap(
-            availableWidth: contentWidth,
+            availableWidth: layoutBudgetContentWidth,
             fixedWidth: effectiveFixedZoneWidth + measurement.fixedWidth,
             items: measurement.taskButtonItems
         )
+        let taskZoneContainerWidth = max(0, layoutBudgetContentWidth - effectiveFixedZoneWidth)
 
         let preferredWidthAffectingStateChanged =
             lastAppliedTrayVisibleApplicationCapacity != trayVisibleApplicationCapacity ||
@@ -1525,6 +1553,7 @@ final class TaskbarContentView: NSView {
         let layoutStateChanged =
             lastAppliedUsesAdaptiveTaskLayout != usesAdaptiveTaskLayout ||
             !approximatelyEqual(lastAppliedTaskWidthCap, widthCap) ||
+            !approximatelyEqual(lastAppliedTaskZoneContainerWidth, taskZoneContainerWidth) ||
             preferredWidthAffectingStateChanged
 
         guard layoutStateChanged else {
@@ -1535,12 +1564,14 @@ final class TaskbarContentView: NSView {
         lastAppliedTaskWidthCap = widthCap
         lastAppliedTrayVisibleApplicationCapacity = trayVisibleApplicationCapacity
         lastAppliedUsesCompactOuterInsets = usesCompactOuterInsets
+        lastAppliedTaskZoneContainerWidth = taskZoneContainerWidth
+        taskZoneContainerWidthConstraint?.constant = taskZoneContainerWidth
         zonesStackView.edgeInsets = zoneEdgeInsets(usesCompactOuterInsets: usesCompactOuterInsets)
         runningAppTrayView.setVisibleApplicationCapacity(
             trayVisibleApplicationCapacity,
             notifiesPreferredWidthChange: false
         )
-        setTaskZoneEdgeSpacersVisible(!usesAdaptiveTaskLayout)
+        setTaskZoneEdgeSpacersVisible(usesTaskZoneEdgeSpacers)
         taskButtonViews().forEach {
             $0.setWidthMode(usesAdaptiveWidth: usesAdaptiveTaskLayout, widthCap: widthCap)
         }
@@ -1562,6 +1593,30 @@ final class TaskbarContentView: NSView {
             bottom: verticalInset,
             right: horizontalInset
         )
+    }
+
+    static func shouldUseCompactOuterInsets(
+        contentWidth: CGFloat,
+        usesAdaptiveTaskLayout: Bool
+    ) -> Bool {
+        usesAdaptiveTaskLayout || contentWidth <= compactOuterInsetContentWidthThreshold
+    }
+
+    static func shouldShowTaskZoneEdgeSpacers(
+        contentWidth: CGFloat,
+        usesAdaptiveTaskLayout: Bool
+    ) -> Bool {
+        !shouldUseCompactOuterInsets(
+            contentWidth: contentWidth,
+            usesAdaptiveTaskLayout: usesAdaptiveTaskLayout
+        )
+    }
+
+    static func layoutBudgetContentWidth(
+        contentWidth: CGFloat,
+        usesCompactOuterInsets: Bool
+    ) -> CGFloat {
+        max(0, contentWidth - (usesCompactOuterInsets ? compactTrailingOverflowGuardWidth : 0))
     }
 
     private func scheduleResponsiveWidthUpdate() {

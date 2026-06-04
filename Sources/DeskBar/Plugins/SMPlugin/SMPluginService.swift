@@ -442,10 +442,10 @@ final class SMPluginService: ObservableObject {
             terminalTabCountByWindowID = snapshot.terminalTabCountByWindowID
         }
         let freshAnnotationsBySessionID = Dictionary(
-            uniqueKeysWithValues: snapshot.annotations.map { ($0.sessionID, $0) }
+            preservingFirstValues: snapshot.annotations.map { ($0.sessionID, $0) }
         )
         let previousAnnotationsBySessionID = Dictionary(
-            uniqueKeysWithValues: agentTabs.map { ($0.sessionID, $0) }
+            preservingFirstValues: agentTabs.map { ($0.sessionID, $0) }
         )
 
         var mergedAnnotationsBySessionID: [String: SMAgentWindowAnnotation] = [:]
@@ -498,7 +498,7 @@ final class SMPluginService: ObservableObject {
 
         let now = Date()
         let liveSessionIDs = Set(sessions.map(\.id))
-        let sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+        let sessionsByID = Dictionary(preservingFirstValues: sessions.map { ($0.id, $0) })
         let updatedAnnotations = agentTabs.compactMap { annotation -> SMAgentWindowAnnotation? in
             guard let session = sessionsByID[annotation.sessionID] else {
                 return nil

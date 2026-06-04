@@ -189,7 +189,7 @@ final class AccessibilityService {
 
         let currentPID = ProcessInfo.processInfo.processIdentifier
         let applicationsByPID = Dictionary(
-            uniqueKeysWithValues: NSWorkspace.shared.runningApplications
+            preservingFirstValues: NSWorkspace.shared.runningApplications
                 .filter { $0.activationPolicy == .regular }
                 .map { ($0.processIdentifier, $0) }
         )

@@ -48,4 +48,10 @@ struct TaskButtonWidthTests {
 
         #expect(width == TaskButtonView.minimumTaskWidth)
     }
+
+    @Test
+    func adaptiveEmergencyMinimumsAllowIconOnlyCompression() {
+        #expect(TaskButtonView.minimumAdaptiveTaskWidth == 32)
+        #expect(TaskButtonView.minimumAdaptivePluginActionTaskWidth == 32)
+    }
 }

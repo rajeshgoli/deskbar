@@ -18,6 +18,8 @@ final class TaskbarPanel: NSPanel {
     private let visualEffectView: NSVisualEffectView
     private weak var hostedView: NSView?
     private var cancellables = Set<AnyCancellable>()
+    private var pendingNormalizationFrame: NSRect?
+    private var frameNormalizationScheduled = false
 
     init(
         permissionsManager: PermissionsManager,
@@ -35,6 +37,7 @@ final class TaskbarPanel: NSPanel {
         )
 
         rootView = TaskbarPanelRootView(settings: settings, frame: NSRect(origin: .zero, size: frame.size))
+        rootView.setPreferredCarrierSize(frame.size)
         chromeShadowView = NSView(frame: NSRect(origin: .zero, size: frame.size))
         visualEffectView = NSVisualEffectView(frame: NSRect(origin: .zero, size: frame.size))
         super.init(
@@ -116,6 +119,10 @@ final class TaskbarPanel: NSPanel {
         collectionBehavior = behavior
     }
 
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
+
     private func updateFrameForCurrentState(animated: Bool, screen: NSScreen? = nil) {
         let resolvedScreen = screen ??
             ScreenGeometry.screen(for: displayID) ??
@@ -128,19 +135,22 @@ final class TaskbarPanel: NSPanel {
             screen: resolvedScreen
         )
 
+        rootView.setPreferredCarrierSize(nextFrame.size)
         let frameChanged = !Self.framesApproximatelyEqual(frame, nextFrame)
         if frameChanged {
-            setFrame(nextFrame, display: true, animate: animated)
-            rootView.frame = NSRect(origin: .zero, size: nextFrame.size)
+            setFrame(nextFrame, display: true, animate: false)
         }
+        rootView.frame = NSRect(origin: .zero, size: nextFrame.size)
 
         updateChromeLayout(animated: animated)
+        scheduleFrameNormalization(to: nextFrame)
     }
 
     private func updateChromeLayout(animated: Bool) {
+        let compactContentWidth = settings.layoutMode.usesCompactWidth ? compactContentWidth() : nil
         let chromeFrame = Self.chromeFrame(
             layoutMode: settings.layoutMode,
-            compactContentWidth: compactContentWidth(),
+            compactContentWidth: compactContentWidth,
             bounds: rootView.bounds
         )
         let shouldAnimate = animated &&
@@ -243,6 +253,41 @@ final class TaskbarPanel: NSPanel {
         visualEffectView.layer?.masksToBounds = usesGlassChrome
     }
 
+    private func scheduleFrameNormalization(to frame: NSRect) {
+        pendingNormalizationFrame = frame
+        guard !frameNormalizationScheduled else {
+            return
+        }
+
+        frameNormalizationScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.frameNormalizationScheduled = false
+            guard let frame = self.pendingNormalizationFrame else {
+                return
+            }
+            self.pendingNormalizationFrame = nil
+            self.normalizeFrame(to: frame)
+        }
+    }
+
+    private func normalizeFrame(to frame: NSRect) {
+        if !Self.framesApproximatelyEqual(self.frame, frame) {
+            setFrame(frame, display: true, animate: false)
+        }
+
+        let rootFrame = NSRect(origin: .zero, size: frame.size)
+        if !Self.framesApproximatelyEqual(rootView.frame, rootFrame) {
+            rootView.frame = rootFrame
+        }
+
+        updateChromeLayout(animated: false)
+        hostedView?.needsLayout = true
+    }
+
     private static func framesApproximatelyEqual(_ lhs: NSRect, _ rhs: NSRect) -> Bool {
         abs(lhs.origin.x - rhs.origin.x) < 0.5 &&
             abs(lhs.origin.y - rhs.origin.y) < 0.5 &&
@@ -269,6 +314,7 @@ private extension DeskBarLayoutMode {
 private final class TaskbarPanelRootView: NSView {
     private let settings: TaskbarSettings
     weak var chromeView: NSView?
+    private var preferredCarrierSize: NSSize?
 
     init(settings: TaskbarSettings, frame frameRect: NSRect) {
         self.settings = settings
@@ -288,5 +334,26 @@ private final class TaskbarPanelRootView: NSView {
         }
 
         return super.hitTest(point)
+    }
+
+    override var fittingSize: NSSize {
+        if let preferredCarrierSize, !settings.layoutMode.usesCompactWidth {
+            return preferredCarrierSize
+        }
+
+        return super.fittingSize
+    }
+
+    override var intrinsicContentSize: NSSize {
+        if let preferredCarrierSize, !settings.layoutMode.usesCompactWidth {
+            return preferredCarrierSize
+        }
+
+        return super.intrinsicContentSize
+    }
+
+    func setPreferredCarrierSize(_ size: NSSize) {
+        preferredCarrierSize = size
+        invalidateIntrinsicContentSize()
     }
 }

@@ -76,11 +76,15 @@ final class WindowManager: ObservableObject {
 
     func refresh(forceDerivedState: Bool = true) {
         let runningApplications = NSWorkspace.shared.runningApplications
-        let allApplicationsByPID = Dictionary(uniqueKeysWithValues: runningApplications.map { ($0.processIdentifier, $0) })
+        let allApplicationsByPID = Dictionary(
+            preservingFirstValues: runningApplications.map { ($0.processIdentifier, $0) }
+        )
         let regularApplications = runningApplications.filter {
             $0.activationPolicy == .regular && !isBlacklisted(bundleIdentifier: $0.bundleIdentifier)
         }
-        let applicationsByPID = Dictionary(uniqueKeysWithValues: regularApplications.map { ($0.processIdentifier, $0) })
+        let applicationsByPID = Dictionary(
+            preservingFirstValues: regularApplications.map { ($0.processIdentifier, $0) }
+        )
         let cgSnapshots = fetchCGWindowSnapshots(
             applicationsByPID: applicationsByPID,
             allApplicationsByPID: allApplicationsByPID
@@ -89,7 +93,7 @@ final class WindowManager: ObservableObject {
         var seenWindowIDs = Set<String>()
 
         var nextAuthoritative: [CGWindowID: WindowInfo] = Dictionary(
-            uniqueKeysWithValues: cgSnapshots.map { snapshot in
+            preservingFirstValues: cgSnapshots.map { snapshot in
                 let info = WindowInfo(
                     pid: snapshot.pid,
                     cgWindowID: snapshot.id,
@@ -109,7 +113,7 @@ final class WindowManager: ObservableObject {
             }
         )
         var nextAuthoritativeBounds = Dictionary(
-            uniqueKeysWithValues: cgSnapshots.map { ($0.id, $0.bounds) }
+            preservingFirstValues: cgSnapshots.map { ($0.id, $0.bounds) }
         )
 
         var visibleProvisionalKeys = Set<String>()
@@ -608,7 +612,7 @@ final class WindowManager: ObservableObject {
         let combined = (Array(authoritative.values) + Array(provisional.values)).filter { window in
             !isBlacklisted(bundleIdentifier: window.bundleIdentifier)
         }
-        let windowsByID = Dictionary(uniqueKeysWithValues: combined.map { ($0.id, $0) })
+        let windowsByID = Dictionary(preservingFirstValues: combined.map { ($0.id, $0) })
         let reconciledOrder = Self.reconcileStableWindowOrder(
             previousOrder: windowOrder,
             currentOrder: currentWindowOrder ?? combined.map(\.id)
@@ -667,7 +671,7 @@ final class WindowManager: ObservableObject {
 
     private func boundsByWindowID(for windows: [WindowInfo]) -> [String: CGRect] {
         Dictionary(
-            uniqueKeysWithValues: windows.compactMap { window in
+            preservingFirstValues: windows.compactMap { window in
                 guard let bounds = bounds(for: window) else {
                     return nil
                 }
@@ -929,7 +933,9 @@ final class WindowManager: ObservableObject {
 
     private func trayApplicationInfoByCandidateKey() -> [String: TrayApplicationInfo] {
         let runningApplications = NSWorkspace.shared.runningApplications
-        let allApplicationsByPID = Dictionary(uniqueKeysWithValues: runningApplications.map { ($0.processIdentifier, $0) })
+        let allApplicationsByPID = Dictionary(
+            preservingFirstValues: runningApplications.map { ($0.processIdentifier, $0) }
+        )
         let regularInfos = runningApplications
             .filter { $0.activationPolicy == .regular }
             .map(TrayApplicationInfo.init(application:))
