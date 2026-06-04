@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Testing
 @testable import DeskBar
@@ -43,6 +44,20 @@ func taskZoneEdgeSpacersHideOnOverflowAtAnyWidth() {
 }
 
 @Test
+func taskZoneLayoutFillsOnlyWhenEdgeSpacersAreVisible() {
+    #expect(
+        TaskbarContentView.taskZoneLayoutTrailingPriority(
+            usesEdgeSpacers: true
+        ) == .required
+    )
+    #expect(
+        TaskbarContentView.taskZoneLayoutTrailingPriority(
+            usesEdgeSpacers: false
+        ) == .defaultLow
+    )
+}
+
+@Test
 func compactOuterInsetsDoNotChangeUltrawideWhenContentFits() {
     #expect(
         TaskbarContentView.shouldUseCompactOuterInsets(
@@ -79,5 +94,29 @@ func layoutBudgetLeavesTinyTrailingGuardWhenCompactInsetsAreVisible() {
             contentWidth: 1512,
             usesCompactOuterInsets: true
         ) == CGFloat(1512) - TaskbarContentView.compactTrailingOverflowGuardWidth
+    )
+}
+
+@Test
+func taskZoneContainerWidthDoesNotSubtractTrailingGuard() {
+    let contentWidth = CGFloat(1512)
+    let fixedWidth = CGFloat(284)
+
+    #expect(
+        TaskbarContentView.taskZoneContainerWidth(
+            contentWidth: contentWidth,
+            effectiveFixedZoneWidth: fixedWidth
+        ) == contentWidth - fixedWidth
+    )
+}
+
+@Test
+func responsiveLayoutIgnoresTransientTinyWidths() {
+    #expect(TaskbarContentView.hasMeasuredResponsiveContentWidth(0) == false)
+    #expect(TaskbarContentView.hasMeasuredResponsiveContentWidth(12) == false)
+    #expect(
+        TaskbarContentView.hasMeasuredResponsiveContentWidth(
+            TaskbarContentView.minimumResponsiveContentWidth
+        )
     )
 }

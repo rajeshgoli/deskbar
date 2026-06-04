@@ -153,16 +153,8 @@ final class TaskbarPanel: NSPanel {
             compactContentWidth: compactContentWidth,
             bounds: rootView.bounds
         )
-        let shouldAnimate = animated &&
-            !settings.layoutMode.usesCompactWidth &&
-            !Self.framesApproximatelyEqual(chromeShadowView.frame, chromeFrame)
 
-        if shouldAnimate {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
-                chromeShadowView.animator().frame = chromeFrame
-            }
-        } else if !Self.framesApproximatelyEqual(chromeShadowView.frame, chromeFrame) {
+        if !Self.framesApproximatelyEqual(chromeShadowView.frame, chromeFrame) {
             chromeShadowView.frame = chromeFrame
         }
 
