@@ -791,7 +791,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         dropIndicatorView.isHidden = false
     }
 
-    private func makeContextMenu() -> NSMenu {
+    func makeContextMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
@@ -846,7 +846,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
     }
 
     private func configurePluginMenuPresentationView(_ menu: NSMenu) {
-        let presentationView: NSView = showsPluginActionButton ? pluginActionButton : self
+        let presentationView: NSView = showsInlinePluginActionButton ? pluginActionButton : self
         for item in menu.items {
             if let command = item.representedObject as? SMPluginAgentMenuCommand {
                 command.presentationView = presentationView

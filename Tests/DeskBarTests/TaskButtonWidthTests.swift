@@ -97,6 +97,55 @@ struct TaskButtonWidthTests {
     }
 
     @MainActor
+    @Test
+    func compactPluginMenuCommandsAnchorToVisibleTaskButton() {
+        let suiteName = "TaskButtonWidthTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let settings = TaskbarSettings(defaults: defaults)
+        let annotation = makeAgentAnnotation()
+        let menuConfiguration = TaskButtonPluginMenuConfiguration(
+            buttonTitle: "sm",
+            tintColor: .systemGreen,
+            showsActionButton: true,
+            menuProvider: {
+                SMPluginAgentMenuFactory.makeMenu(
+                    annotation: annotation,
+                    target: nil,
+                    action: Selector(("performMenuCommand:"))
+                )
+            }
+        )
+        let button = TaskButtonView(
+            windowInfo: WindowInfo(
+                pid: 123,
+                cgWindowID: 456,
+                appName: "Session Manager",
+                title: "Active session",
+                icon: nil,
+                bundleIdentifier: "com.example.session"
+            ),
+            isActive: false,
+            hasBadge: false,
+            isAccessibilityAvailable: false,
+            runtimeState: AppRuntimeState(),
+            showsActivityOverlay: false,
+            settings: settings,
+            blacklistManager: BlacklistManager(),
+            pluginMenuConfiguration: menuConfiguration,
+            activationHandler: { _ in }
+        )
+
+        button.setWidthMode(usesAdaptiveWidth: true, widthCap: 40)
+
+        let menu = button.makeContextMenu()
+        let renameCommand = menu.items
+            .first { $0.title == "Rename" }?
+            .representedObject as? SMPluginAgentMenuCommand
+        #expect(renameCommand?.presentationView === button)
+    }
+
+    @MainActor
     private func findPluginActionButton(in view: NSView) -> NSButton? {
         if let button = view as? NSButton,
            button.toolTip == "Session Manager actions" {
@@ -110,5 +159,26 @@ struct TaskButtonWidthTests {
         }
 
         return nil
+    }
+
+    private func makeAgentAnnotation() -> SMAgentWindowAnnotation {
+        SMAgentWindowAnnotation(
+            sessionID: "session-123",
+            friendlyName: "Session 123",
+            workingDirectory: "/tmp",
+            provider: "codex",
+            sessionStatus: "running",
+            activityState: .working,
+            currentTask: nil,
+            agentStatusText: nil,
+            lastToolName: nil,
+            lastActionSummary: nil,
+            tokensUsed: nil,
+            tmuxSession: "session-123",
+            terminalWindowID: 42,
+            terminalTTY: "/dev/ttys001",
+            terminalFrame: nil,
+            isSelectedTerminalTab: true
+        )
     }
 }
