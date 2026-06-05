@@ -156,10 +156,15 @@ private struct SMSessionMappingIdentity: Hashable {
 }
 
 private enum SMPluginRefreshResult {
-    case mapped(SMAgentTabFetchSnapshot)
-    case sessions([SMSessionSnapshot])
+    case mapped(SMPluginRefreshPayload<SMAgentTabFetchSnapshot>)
+    case sessions(SMPluginRefreshPayload<[SMSessionSnapshot]>)
     case clear
     case failed
+}
+
+private struct SMPluginRefreshPayload<Value> {
+    let value: Value
+    let tmuxClientEventVersion: Int?
 }
 
 enum SMPluginAgentMenuAction {
@@ -281,12 +286,15 @@ final class SMPluginService: ObservableObject {
 
     private let pollInterval: TimeInterval
     private var pollLoopTask: Task<Void, Never>?
+    private var eventStreamTask: Task<Void, Never>?
+    private var eventDrivenRefreshTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var refreshStartedAt: Date?
     private var refreshGeneration = 0
     private var isEnabled: Bool
     private var lastTerminalMappingRefreshAt: Date?
     private var lastMappedSessionIdentities: Set<SMSessionMappingIdentity> = []
+    private var lastTmuxClientEventVersion: Int?
     private var lastObservedAgentTabAtBySessionID: [String: Date] = [:]
     private var renamePopover: NSPopover?
 
@@ -298,10 +306,13 @@ final class SMPluginService: ObservableObject {
         }
 
         startPolling()
+        startEventStream()
     }
 
     deinit {
         pollLoopTask?.cancel()
+        eventStreamTask?.cancel()
+        eventDrivenRefreshTask?.cancel()
         refreshTask?.cancel()
     }
 
@@ -313,19 +324,61 @@ final class SMPluginService: ObservableObject {
         self.isEnabled = isEnabled
         if isEnabled {
             startPolling()
+            startEventStream()
         } else {
             pollLoopTask?.cancel()
             pollLoopTask = nil
+            eventStreamTask?.cancel()
+            eventStreamTask = nil
+            eventDrivenRefreshTask?.cancel()
+            eventDrivenRefreshTask = nil
             refreshTask?.cancel()
             refreshTask = nil
             refreshStartedAt = nil
             refreshGeneration += 1
             lastTerminalMappingRefreshAt = nil
             lastMappedSessionIdentities = []
+            lastTmuxClientEventVersion = nil
             windowAnnotations = [:]
             agentTabs = []
             terminalTabCountByWindowID = [:]
             lastObservedAgentTabAtBySessionID = [:]
+        }
+    }
+
+    private func startEventStream() {
+        eventStreamTask?.cancel()
+        eventStreamTask = Task(priority: .utility) { [weak self] in
+            await Self.consumeEventStream { eventType in
+                guard eventType == "tmux_client_event" else {
+                    return
+                }
+
+                await MainActor.run {
+                    self?.scheduleEventDrivenRefresh()
+                }
+            }
+        }
+    }
+
+    private func scheduleEventDrivenRefresh() {
+        eventDrivenRefreshTask?.cancel()
+        eventDrivenRefreshTask = Task { @MainActor [weak self] in
+            let retryDelays: [UInt64] = [
+                0,
+                750_000_000,
+                1_500_000_000
+            ]
+
+            for delay in retryDelays {
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+                guard !Task.isCancelled else {
+                    return
+                }
+                self?.refresh(forceTerminalMapping: true)
+            }
         }
     }
 
@@ -341,7 +394,7 @@ final class SMPluginService: ObservableObject {
         }
     }
 
-    func refresh() {
+    func refresh(forceTerminalMapping: Bool = false) {
         guard isEnabled else {
             windowAnnotations = [:]
             agentTabs = []
@@ -351,11 +404,15 @@ final class SMPluginService: ObservableObject {
 
         if let refreshTask {
             let refreshAge = refreshStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-            guard refreshAge > Self.refreshStaleTimeout else {
+            guard forceTerminalMapping || refreshAge > Self.refreshStaleTimeout else {
                 return
             }
 
-            Self.writeDiagnostic("refresh stale after \(String(format: "%.1f", refreshAge))s; starting replacement poll")
+            if forceTerminalMapping {
+                Self.writeDiagnostic("tmux client event; starting terminal mapping refresh")
+            } else {
+                Self.writeDiagnostic("refresh stale after \(String(format: "%.1f", refreshAge))s; starting replacement poll")
+            }
             refreshTask.cancel()
             self.refreshTask = nil
             refreshStartedAt = nil
@@ -367,11 +424,14 @@ final class SMPluginService: ObservableObject {
         refreshStartedAt = Date()
         let now = Date()
         let mappedSessionIdentities = lastMappedSessionIdentities
-        let shouldRefreshTerminalMapping = lastTerminalMappingRefreshAt
+        let tmuxClientEventVersion = lastTmuxClientEventVersion
+        let intervalRequiresTerminalMapping = lastTerminalMappingRefreshAt
             .map { now.timeIntervalSince($0) >= Self.terminalMappingRefreshInterval } ?? true
+        let shouldRefreshTerminalMapping = forceTerminalMapping || intervalRequiresTerminalMapping
         refreshTask = Task { [weak self] in
             let result = await Self.fetchRefreshResult(
                 lastMappedSessionIdentities: mappedSessionIdentities,
+                lastTmuxClientEventVersion: tmuxClientEventVersion,
                 shouldRefreshTerminalMapping: shouldRefreshTerminalMapping
             )
 
@@ -394,15 +454,22 @@ final class SMPluginService: ObservableObject {
                 }
 
                 switch result {
-                case .mapped(let snapshot):
+                case .mapped(let payload):
+                    if let eventVersion = payload.tmuxClientEventVersion {
+                        self.lastTmuxClientEventVersion = eventVersion
+                    }
                     self.lastTerminalMappingRefreshAt = Date()
-                    self.lastMappedSessionIdentities = snapshot.sessionMappingIdentities
-                    self.applyAgentTabFetchSnapshot(snapshot)
-                case .sessions(let sessions):
-                    self.applySessionSnapshot(sessions)
+                    self.lastMappedSessionIdentities = payload.value.sessionMappingIdentities
+                    self.applyAgentTabFetchSnapshot(payload.value)
+                case .sessions(let payload):
+                    if let eventVersion = payload.tmuxClientEventVersion {
+                        self.lastTmuxClientEventVersion = eventVersion
+                    }
+                    self.applySessionSnapshot(payload.value)
                 case .clear:
                     self.lastTerminalMappingRefreshAt = nil
                     self.lastMappedSessionIdentities = []
+                    self.lastTmuxClientEventVersion = nil
                     self.lastObservedAgentTabAtBySessionID = [:]
                     self.windowAnnotations = [:]
                     self.agentTabs = []
@@ -416,21 +483,38 @@ final class SMPluginService: ObservableObject {
 
     private nonisolated static func fetchRefreshResult(
         lastMappedSessionIdentities: Set<SMSessionMappingIdentity>,
+        lastTmuxClientEventVersion: Int?,
         shouldRefreshTerminalMapping: Bool
     ) async -> SMPluginRefreshResult {
-        guard let sessions = await fetchSessions() else {
+        async let sessionsTask = fetchSessions()
+        async let eventStateTask = fetchEventState()
+
+        guard let sessions = await sessionsTask else {
             return .failed
         }
+        let eventState = await eventStateTask
+        let eventVersion = eventState?.tmuxClientEventVersion
 
         guard !sessions.isEmpty else {
             return .clear
         }
 
         let sessionMappingIdentities = mappingIdentities(for: sessions)
+        let eventRequiresTerminalMapping = eventVersion.map { version in
+            guard let lastTmuxClientEventVersion else {
+                return false
+            }
+
+            return version != lastTmuxClientEventVersion
+        } ?? false
         let needsTerminalMapping = shouldRefreshTerminalMapping ||
+            eventRequiresTerminalMapping ||
             sessionMappingIdentities != lastMappedSessionIdentities
         guard needsTerminalMapping else {
-            return .sessions(sessions)
+            return .sessions(SMPluginRefreshPayload(
+                value: sessions,
+                tmuxClientEventVersion: eventVersion
+            ))
         }
 
         let terminalIsRunning = await MainActor.run {
@@ -444,7 +528,14 @@ final class SMPluginService: ObservableObject {
             return .failed
         }
 
-        return .mapped(snapshot)
+        if eventRequiresTerminalMapping, let eventVersion {
+            writeDiagnostic("tmux event state changed to \(eventVersion); refreshed terminal mapping")
+        }
+
+        return .mapped(SMPluginRefreshPayload(
+            value: snapshot,
+            tmuxClientEventVersion: eventVersion
+        ))
     }
 
     private func applyAgentTabFetchSnapshot(_ snapshot: SMAgentTabFetchSnapshot) {
@@ -765,6 +856,57 @@ final class SMPluginService: ObservableObject {
         ).isEmpty
     }
 
+    private nonisolated static func consumeEventStream(
+        onEvent: @escaping (String) async -> Void
+    ) async {
+        while !Task.isCancelled {
+            guard let eventsURL = SMClientConfiguration.apiURL(path: "/events") else {
+                return
+            }
+
+            var request = URLRequest(url: eventsURL)
+            request.timeoutInterval = 65
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+            do {
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                if let httpResponse = response as? HTTPURLResponse,
+                   !(200...299).contains(httpResponse.statusCode) {
+                    writeDiagnostic("event stream returned HTTP \(httpResponse.statusCode)")
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    continue
+                }
+
+                var currentEventType: String?
+                for try await line in bytes.lines {
+                    if Task.isCancelled {
+                        return
+                    }
+
+                    if line.hasPrefix("event:") {
+                        currentEventType = String(line.dropFirst("event:".count))
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        continue
+                    }
+
+                    if line.isEmpty {
+                        if let currentEventType, !currentEventType.isEmpty {
+                            await onEvent(currentEventType)
+                        }
+                        currentEventType = nil
+                    }
+                }
+            } catch {
+                if Task.isCancelled {
+                    return
+                }
+                writeDiagnostic("event stream failed; reconnecting")
+            }
+
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        }
+    }
+
     private nonisolated static func fetchAgentTabAnnotations() async -> SMAgentTabFetchSnapshot? {
         guard let sessions = await fetchSessions() else {
             writeDiagnostic("sessions fetch failed")
@@ -883,6 +1025,22 @@ final class SMPluginService: ObservableObject {
                     tmuxSocketName: session.tmuxSocketName
                 )
             }
+        } catch {
+            return nil
+        }
+    }
+
+    private nonisolated static func fetchEventState() async -> SMEventStateResponse? {
+        guard let eventStateURL = SMClientConfiguration.apiURL(path: "/events/state") else {
+            return nil
+        }
+
+        var request = URLRequest(url: eventStateURL)
+        request.timeoutInterval = 0.75
+
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            return try JSONDecoder().decode(SMEventStateResponse.self, from: data)
         } catch {
             return nil
         }
@@ -1809,6 +1967,14 @@ private final class SMPluginRenameViewController: NSViewController, NSTextFieldD
 
 private struct SMSessionsResponse: Decodable {
     let sessions: [SMAPISession]
+}
+
+private struct SMEventStateResponse: Decodable {
+    let tmuxClientEventVersion: Int
+
+    enum CodingKeys: String, CodingKey {
+        case tmuxClientEventVersion = "tmux_client_event_version"
+    }
 }
 
 private struct SMAPISession: Decodable {
