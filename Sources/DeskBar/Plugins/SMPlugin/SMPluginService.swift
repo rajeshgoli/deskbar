@@ -282,6 +282,7 @@ final class SMPluginService: ObservableObject {
     private let pollInterval: TimeInterval
     private var pollLoopTask: Task<Void, Never>?
     private var eventStreamTask: Task<Void, Never>?
+    private var eventDrivenRefreshTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var refreshStartedAt: Date?
     private var refreshGeneration = 0
@@ -305,6 +306,7 @@ final class SMPluginService: ObservableObject {
     deinit {
         pollLoopTask?.cancel()
         eventStreamTask?.cancel()
+        eventDrivenRefreshTask?.cancel()
         refreshTask?.cancel()
     }
 
@@ -322,6 +324,8 @@ final class SMPluginService: ObservableObject {
             pollLoopTask = nil
             eventStreamTask?.cancel()
             eventStreamTask = nil
+            eventDrivenRefreshTask?.cancel()
+            eventDrivenRefreshTask = nil
             refreshTask?.cancel()
             refreshTask = nil
             refreshStartedAt = nil
@@ -344,8 +348,29 @@ final class SMPluginService: ObservableObject {
                 }
 
                 await MainActor.run {
-                    self?.refresh(forceTerminalMapping: true)
+                    self?.scheduleEventDrivenRefresh()
                 }
+            }
+        }
+    }
+
+    private func scheduleEventDrivenRefresh() {
+        eventDrivenRefreshTask?.cancel()
+        eventDrivenRefreshTask = Task { @MainActor [weak self] in
+            let retryDelays: [UInt64] = [
+                0,
+                750_000_000,
+                1_500_000_000
+            ]
+
+            for delay in retryDelays {
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+                guard !Task.isCancelled else {
+                    return
+                }
+                self?.refresh(forceTerminalMapping: true)
             }
         }
     }
