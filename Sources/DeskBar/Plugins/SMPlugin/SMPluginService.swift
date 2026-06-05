@@ -281,6 +281,7 @@ final class SMPluginService: ObservableObject {
 
     private let pollInterval: TimeInterval
     private var pollLoopTask: Task<Void, Never>?
+    private var eventStreamTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var refreshStartedAt: Date?
     private var refreshGeneration = 0
@@ -298,10 +299,12 @@ final class SMPluginService: ObservableObject {
         }
 
         startPolling()
+        startEventStream()
     }
 
     deinit {
         pollLoopTask?.cancel()
+        eventStreamTask?.cancel()
         refreshTask?.cancel()
     }
 
@@ -313,9 +316,12 @@ final class SMPluginService: ObservableObject {
         self.isEnabled = isEnabled
         if isEnabled {
             startPolling()
+            startEventStream()
         } else {
             pollLoopTask?.cancel()
             pollLoopTask = nil
+            eventStreamTask?.cancel()
+            eventStreamTask = nil
             refreshTask?.cancel()
             refreshTask = nil
             refreshStartedAt = nil
@@ -326,6 +332,21 @@ final class SMPluginService: ObservableObject {
             agentTabs = []
             terminalTabCountByWindowID = [:]
             lastObservedAgentTabAtBySessionID = [:]
+        }
+    }
+
+    private func startEventStream() {
+        eventStreamTask?.cancel()
+        eventStreamTask = Task(priority: .utility) { [weak self] in
+            await Self.consumeEventStream { eventType in
+                guard eventType == "tmux_client_event" else {
+                    return
+                }
+
+                await MainActor.run {
+                    self?.refresh(forceTerminalMapping: true)
+                }
+            }
         }
     }
 
@@ -341,7 +362,7 @@ final class SMPluginService: ObservableObject {
         }
     }
 
-    func refresh() {
+    func refresh(forceTerminalMapping: Bool = false) {
         guard isEnabled else {
             windowAnnotations = [:]
             agentTabs = []
@@ -351,11 +372,15 @@ final class SMPluginService: ObservableObject {
 
         if let refreshTask {
             let refreshAge = refreshStartedAt.map { Date().timeIntervalSince($0) } ?? 0
-            guard refreshAge > Self.refreshStaleTimeout else {
+            guard forceTerminalMapping || refreshAge > Self.refreshStaleTimeout else {
                 return
             }
 
-            Self.writeDiagnostic("refresh stale after \(String(format: "%.1f", refreshAge))s; starting replacement poll")
+            if forceTerminalMapping {
+                Self.writeDiagnostic("tmux client event; starting terminal mapping refresh")
+            } else {
+                Self.writeDiagnostic("refresh stale after \(String(format: "%.1f", refreshAge))s; starting replacement poll")
+            }
             refreshTask.cancel()
             self.refreshTask = nil
             refreshStartedAt = nil
@@ -367,8 +392,9 @@ final class SMPluginService: ObservableObject {
         refreshStartedAt = Date()
         let now = Date()
         let mappedSessionIdentities = lastMappedSessionIdentities
-        let shouldRefreshTerminalMapping = lastTerminalMappingRefreshAt
+        let intervalRequiresTerminalMapping = lastTerminalMappingRefreshAt
             .map { now.timeIntervalSince($0) >= Self.terminalMappingRefreshInterval } ?? true
+        let shouldRefreshTerminalMapping = forceTerminalMapping || intervalRequiresTerminalMapping
         refreshTask = Task { [weak self] in
             let result = await Self.fetchRefreshResult(
                 lastMappedSessionIdentities: mappedSessionIdentities,
@@ -763,6 +789,57 @@ final class SMPluginService: ObservableObject {
         !NSRunningApplication.runningApplications(
             withBundleIdentifier: terminalBundleIdentifier
         ).isEmpty
+    }
+
+    private nonisolated static func consumeEventStream(
+        onEvent: @escaping (String) async -> Void
+    ) async {
+        while !Task.isCancelled {
+            guard let eventsURL = SMClientConfiguration.apiURL(path: "/events") else {
+                return
+            }
+
+            var request = URLRequest(url: eventsURL)
+            request.timeoutInterval = 65
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+            do {
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                if let httpResponse = response as? HTTPURLResponse,
+                   !(200...299).contains(httpResponse.statusCode) {
+                    writeDiagnostic("event stream returned HTTP \(httpResponse.statusCode)")
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    continue
+                }
+
+                var currentEventType: String?
+                for try await line in bytes.lines {
+                    if Task.isCancelled {
+                        return
+                    }
+
+                    if line.hasPrefix("event:") {
+                        currentEventType = String(line.dropFirst("event:".count))
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        continue
+                    }
+
+                    if line.isEmpty {
+                        if let currentEventType, !currentEventType.isEmpty {
+                            await onEvent(currentEventType)
+                        }
+                        currentEventType = nil
+                    }
+                }
+            } catch {
+                if Task.isCancelled {
+                    return
+                }
+                writeDiagnostic("event stream failed; reconnecting")
+            }
+
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        }
     }
 
     private nonisolated static func fetchAgentTabAnnotations() async -> SMAgentTabFetchSnapshot? {
