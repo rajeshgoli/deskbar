@@ -794,8 +794,13 @@ final class SMPluginService: ObservableObject {
             }
 
             guard !terminalTabs.isEmpty else {
-                writeDiagnostic("terminal tabs empty for live sessions=\(sessions.count); preserving previous annotations")
-                return nil
+                writeDiagnostic("terminal tabs empty for live sessions=\(sessions.count); clearing local annotations")
+                return SMAgentTabFetchSnapshot(
+                    annotations: [],
+                    liveSessionIDs: [],
+                    terminalTabCountByWindowID: [:],
+                    sessionMappingIdentities: []
+                )
             }
             let terminalTabCountByWindowID = terminalTabCountByWindowID(from: terminalTabs)
 
