@@ -689,107 +689,20 @@ final class TaskbarContentView: NSView {
         guard
             let smPluginService,
             settings.enableSessionManagerPlugin,
-            let screen = ScreenGeometry.screen(for: displayID)
+            ScreenGeometry.screen(for: displayID) != nil
         else {
             return baseWindows
         }
 
-        let displayBounds = ScreenGeometry.displayBounds(for: screen)
-        let terminalWindows = baseWindows.filter {
-            $0.bundleIdentifier == SMPluginService.terminalBundleIdentifier
-        }
-        let terminalWindowsByID = Dictionary(
-            preservingFirstValues: terminalWindows.compactMap { window -> (CGWindowID, WindowInfo)? in
-                guard
-                    let cgWindowID = window.cgWindowID
-                else {
-                    return nil
-                }
-
-                return (cgWindowID, window)
+        return SMTaskWindowPlanner.scopedWindows(
+            baseWindows: baseWindows,
+            annotations: smPluginService.agentTabs,
+            terminalTabCountByWindowID: smPluginService.terminalTabCountByWindowID,
+            showAgentTitles: settings.showSessionManagerAgentTitles,
+            frameProvider: { [windowManager] window in
+                windowManager.frame(for: window)
             }
         )
-        let terminalApplication = NSRunningApplication.runningApplications(
-            withBundleIdentifier: SMPluginService.terminalBundleIdentifier
-        ).first
-
-        let scopedAgentTabs = smPluginService.agentTabs.filter { annotation in
-            if terminalWindowsByID[annotation.terminalWindowID] != nil {
-                return true
-            }
-
-            guard let terminalFrame = annotation.terminalFrame else {
-                return false
-            }
-
-            return ScreenGeometry.isWindow(bounds: terminalFrame, onDisplay: displayBounds)
-        }
-        guard !scopedAgentTabs.isEmpty else {
-            return baseWindows
-        }
-
-        let agentTabCountByWindowID = Dictionary(grouping: scopedAgentTabs, by: \.terminalWindowID)
-            .mapValues(\.count)
-        let nonAgentWindows = baseWindows.filter { window in
-            guard
-                window.bundleIdentifier == SMPluginService.terminalBundleIdentifier
-            else {
-                return true
-            }
-
-            guard
-                let cgWindowID = window.cgWindowID,
-                agentTabCountByWindowID[cgWindowID] != nil
-            else {
-                return true
-            }
-
-            return terminalWindowHasNonAgentTabs(windowID: cgWindowID)
-        }
-
-        let virtualAgentWindows = scopedAgentTabs.compactMap { annotation -> WindowInfo? in
-            let sourceWindow = terminalWindowsByID[annotation.terminalWindowID] ??
-                terminalWindows.first { window in
-                    guard
-                        let annotationFrame = annotation.terminalFrame,
-                        let windowFrame = windowManager.frame(for: window)
-                    else {
-                        return false
-                    }
-
-                    return smTerminalFrame(annotationFrame, matches: windowFrame)
-                } ??
-                terminalWindows.first
-
-            guard sourceWindow != nil || terminalApplication != nil else {
-                return nil
-            }
-
-            return WindowInfo(
-                pid: sourceWindow?.pid ?? terminalApplication?.processIdentifier ?? 0,
-                cgWindowID: nil,
-                provisionalID: smVirtualWindowID(for: annotation),
-                appName: sourceWindow?.appName ?? terminalApplication?.localizedName ?? "Terminal",
-                title: settings.showSessionManagerAgentTitles
-                    ? annotation.friendlyName
-                    : sourceWindow?.title ?? "Terminal",
-                icon: sourceWindow?.icon ?? terminalApplication?.icon,
-                bundleIdentifier: sourceWindow?.bundleIdentifier ?? terminalApplication?.bundleIdentifier,
-                isMinimized: sourceWindow?.isMinimized ?? false,
-                isHidden: sourceWindow?.isHidden ?? terminalApplication?.isHidden ?? false,
-                isProvisional: true
-            )
-        }
-
-        return nonAgentWindows + virtualAgentWindows
-    }
-
-    private func smTerminalFrame(_ lhs: CGRect, matches rhs: CGRect) -> Bool {
-        let tolerance: CGFloat = 4
-        return abs(lhs.minX - rhs.minX) <= tolerance &&
-            abs(lhs.minY - rhs.minY) <= tolerance &&
-            abs(lhs.width - rhs.width) <= tolerance &&
-            abs(lhs.height - rhs.height) <= tolerance
     }
 
     private func terminalWindowHasNonAgentTabs(windowID: CGWindowID) -> Bool {
@@ -1400,7 +1313,7 @@ final class TaskbarContentView: NSView {
     }
 
     private func smVirtualWindowID(for annotation: SMAgentWindowAnnotation) -> String {
-        "sm-agent:\(annotation.sessionID)"
+        SMTaskWindowPlanner.virtualWindowID(for: annotation)
     }
 
     private func smPluginMenuConfiguration(for window: WindowInfo) -> TaskButtonPluginMenuConfiguration? {
