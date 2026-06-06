@@ -13,6 +13,7 @@ final class AXObserverManager {
         kAXWindowMiniaturizedNotification as CFString,
         kAXWindowDeminiaturizedNotification as CFString,
         kAXFocusedWindowChangedNotification as CFString,
+        kAXMainWindowChangedNotification as CFString,
         kAXTitleChangedNotification as CFString,
         kAXWindowResizedNotification as CFString
     ]
@@ -118,7 +119,12 @@ final class AXObserverManager {
         )
     }
 
-    fileprivate func handleAXNotification() {
+    fileprivate func handleAXNotification(_ notification: CFString) {
+        if notification == kAXFocusedWindowChangedNotification as CFString ||
+            notification == kAXMainWindowChangedNotification as CFString {
+            windowManager?.notifyFocusMayHaveChanged()
+        }
+
         debouncer.debounce { [weak self] in
             self?.windowManager?.refresh()
         }
@@ -140,5 +146,5 @@ private let observerCallback: AXObserverCallback = { _, element, notification, r
         manager.handleWindowResized(element)
     }
 
-    manager.handleAXNotification()
+    manager.handleAXNotification(notification)
 }

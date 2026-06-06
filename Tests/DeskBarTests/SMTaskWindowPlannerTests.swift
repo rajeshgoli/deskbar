@@ -74,6 +74,70 @@ func smTaskPlannerKeepsTerminalWindowWhenItHasNonAgentTabs() {
     #expect(result.map(\.provisionalID).contains("sm-agent:session-123"))
 }
 
+@Test
+func smTaskPlannerKeepsVirtualAgentAtSourceWindowPosition() {
+    let notesWindow = appWindow(
+        pid: 11,
+        cgWindowID: 101,
+        appName: "Notes",
+        bundleIdentifier: "com.apple.Notes"
+    )
+    let terminalWindow = window(
+        cgWindowID: 42,
+        title: "Terminal"
+    )
+    let safariWindow = appWindow(
+        pid: 33,
+        cgWindowID: 202,
+        appName: "Safari",
+        bundleIdentifier: "com.apple.Safari"
+    )
+    let annotation = agentAnnotation(terminalWindowID: 42)
+
+    let result = SMTaskWindowPlanner.scopedWindows(
+        baseWindows: [notesWindow, terminalWindow, safariWindow],
+        annotations: [annotation],
+        terminalTabCountByWindowID: [42: 1],
+        showAgentTitles: true,
+        frameProvider: { _ in nil }
+    )
+
+    #expect(result.map(\.id) == [
+        notesWindow.id,
+        "sm-agent:session-123",
+        safariWindow.id
+    ])
+}
+
+@Test
+func smTaskPlannerPlacesVirtualAgentNextToMixedTerminalWindow() {
+    let terminalWindow = window(
+        cgWindowID: 42,
+        title: "Terminal"
+    )
+    let safariWindow = appWindow(
+        pid: 33,
+        cgWindowID: 202,
+        appName: "Safari",
+        bundleIdentifier: "com.apple.Safari"
+    )
+    let annotation = agentAnnotation(terminalWindowID: 42)
+
+    let result = SMTaskWindowPlanner.scopedWindows(
+        baseWindows: [terminalWindow, safariWindow],
+        annotations: [annotation],
+        terminalTabCountByWindowID: [42: 2],
+        showAgentTitles: true,
+        frameProvider: { _ in nil }
+    )
+
+    #expect(result.map(\.id) == [
+        terminalWindow.id,
+        "sm-agent:session-123",
+        safariWindow.id
+    ])
+}
+
 private func window(
     cgWindowID: CGWindowID,
     title: String
@@ -85,6 +149,22 @@ private func window(
         title: title,
         icon: nil,
         bundleIdentifier: SMPluginService.terminalBundleIdentifier
+    )
+}
+
+private func appWindow(
+    pid: pid_t,
+    cgWindowID: CGWindowID,
+    appName: String,
+    bundleIdentifier: String
+) -> WindowInfo {
+    WindowInfo(
+        pid: pid,
+        cgWindowID: cgWindowID,
+        appName: appName,
+        title: appName,
+        icon: nil,
+        bundleIdentifier: bundleIdentifier
     )
 }
 
