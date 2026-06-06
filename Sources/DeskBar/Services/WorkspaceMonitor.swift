@@ -32,6 +32,10 @@ final class WorkspaceMonitor {
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
+                if name == NSWorkspace.didActivateApplicationNotification {
+                    self?.windowManager?.notifyFocusMayHaveChanged()
+                }
+
                 self?.debouncer.debounce { [weak self] in
                     self?.windowManager?.refresh()
                 }

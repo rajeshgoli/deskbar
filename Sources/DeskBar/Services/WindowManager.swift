@@ -7,6 +7,7 @@ final class WindowManager: ObservableObject {
     @Published var windows: [WindowInfo] = []
     @Published private(set) var visibleWindows: [WindowInfo] = []
     @Published private(set) var trayApps: [TrayApplicationInfo] = []
+    @Published private(set) var focusRevision: UInt64 = 0
 
     private let accessibilityService: AccessibilityService
     private let blacklistManager: BlacklistManager
@@ -31,6 +32,7 @@ final class WindowManager: ObservableObject {
     private var publishedWindowState = PublishedWindowState(windows: [], boundsByWindowID: [:])
     private var trayCandidateInfosByKey: [String: TrayApplicationInfo] = [:]
     private var hasTrayCandidateInfoCache = false
+    private var focusRevisionSequence: UInt64 = 0
 
     init(
         accessibilityService: AccessibilityService = AccessibilityService(),
@@ -72,6 +74,29 @@ final class WindowManager: ObservableObject {
         refreshDebouncer.debounce { [weak self] in
             self?.refresh(forceDerivedState: true)
         }
+    }
+
+    func notifyFocusMayHaveChanged() {
+        focusRevisionSequence &+= 1
+        let sequence = focusRevisionSequence
+        publishFocusRevision()
+
+        for delay in [0.08, 0.20, 0.45] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard
+                    let self,
+                    self.focusRevisionSequence == sequence
+                else {
+                    return
+                }
+
+                self.publishFocusRevision()
+            }
+        }
+    }
+
+    private func publishFocusRevision() {
+        focusRevision &+= 1
     }
 
     func refresh(forceDerivedState: Bool = true) {

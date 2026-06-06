@@ -412,6 +412,13 @@ final class TaskbarContentView: NSView {
             }
             .store(in: &cancellables)
 
+        windowManager.$focusRevision
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.rebuildTaskZone()
+            }
+            .store(in: &cancellables)
+
         badgeMonitor.$appBadges
             .receive(on: RunLoop.main)
             .sink { [weak self] badges in
@@ -1051,6 +1058,13 @@ final class TaskbarContentView: NSView {
             return nil
         }
 
+        if let windowID = topmostCGWindowID(
+            for: application.processIdentifier,
+            in: matchingVisibleWindows
+        ) {
+            return windowID
+        }
+
         let applicationElement = AXUIElementCreateApplication(application.processIdentifier)
         let prioritizedAttributes: [CFString] = [
             kAXFocusedWindowAttribute as CFString,
@@ -1065,6 +1079,40 @@ final class TaskbarContentView: NSView {
         }
 
         return matchingVisibleWindows.count == 1 ? matchingVisibleWindows.first?.id : nil
+    }
+
+    private func topmostCGWindowID(
+        for pid: pid_t,
+        in matchingVisibleWindows: [WindowInfo]
+    ) -> String? {
+        let trackedCGWindowIDs = Set(matchingVisibleWindows.compactMap(\.cgWindowID))
+        guard !trackedCGWindowIDs.isEmpty else {
+            return nil
+        }
+
+        let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly, .excludeDesktopElements)
+        guard
+            let windowInfoList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]
+        else {
+            return nil
+        }
+
+        for windowInfo in windowInfoList {
+            guard
+                let ownerPID = windowInfo[kCGWindowOwnerPID as String] as? pid_t,
+                ownerPID == pid,
+                let layer = windowInfo[kCGWindowLayer as String] as? Int,
+                layer == 0,
+                let windowNumber = windowInfo[kCGWindowNumber as String] as? CGWindowID,
+                trackedCGWindowIDs.contains(windowNumber)
+            else {
+                continue
+            }
+
+            return "\(pid)-\(windowNumber)"
+        }
+
+        return nil
     }
 
     private func isWindowActive(
@@ -1794,16 +1842,29 @@ final class TaskbarContentView: NSView {
     }
 
     private func installCollapseMonitors() {
-        let eventMask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        let eventMask: NSEvent.EventTypeMask = [
+            .leftMouseDown,
+            .rightMouseDown,
+            .otherMouseDown,
+            .leftMouseUp,
+            .rightMouseUp,
+            .otherMouseUp
+        ]
 
         localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: eventMask) { [weak self] event in
-            self?.handleLocalClick(event)
+            if event.isMouseDown {
+                self?.handleLocalClick(event)
+            }
+            self?.windowManager.notifyFocusMayHaveChanged()
             return event
         }
 
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: eventMask) { [weak self] _ in
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: eventMask) { [weak self] event in
             DispatchQueue.main.async {
-                self?.collapseExpandedGroup()
+                if event.isMouseDown {
+                    self?.collapseExpandedGroup()
+                }
+                self?.windowManager.notifyFocusMayHaveChanged()
             }
         }
     }
@@ -2877,5 +2938,13 @@ private func reconcileArrangedSubviews(_ desiredViews: [NSView], in stackView: N
             view.alphaValue = 1
             stackView.insertArrangedSubview(view, at: index)
         }
+    }
+}
+
+private extension NSEvent {
+    var isMouseDown: Bool {
+        type == .leftMouseDown ||
+            type == .rightMouseDown ||
+            type == .otherMouseDown
     }
 }

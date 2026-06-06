@@ -45,49 +45,56 @@ struct SMTaskWindowPlanner {
             return baseWindows
         }
 
-        let agentTabCountBySourceWindowID = Dictionary(
-            grouping: backedAgentTabs.compactMap { tab -> CGWindowID? in
-                tab.sourceWindow.cgWindowID
-            },
-            by: { $0 }
-        ).mapValues(\.count)
-        let nonAgentWindows = baseWindows.filter { window in
+        let backedAgentTabsBySourceWindowID = Dictionary(
+            grouping: backedAgentTabs,
+            by: { $0.sourceWindow.id }
+        )
+        var scopedWindows: [WindowInfo] = []
+        var emittedSourceWindowIDs = Set<String>()
+
+        for window in baseWindows {
             guard window.bundleIdentifier == SMPluginService.terminalBundleIdentifier else {
-                return true
+                scopedWindows.append(window)
+                continue
             }
 
-            guard
-                let cgWindowID = window.cgWindowID,
-                agentTabCountBySourceWindowID[cgWindowID] != nil
-            else {
-                return true
+            guard let tabs = backedAgentTabsBySourceWindowID[window.id] else {
+                scopedWindows.append(window)
+                continue
             }
 
-            return terminalWindowHasNonAgentTabs(
-                windowID: cgWindowID,
-                agentTabCount: agentTabCountBySourceWindowID[cgWindowID] ?? 0,
+            if terminalWindowHasNonAgentTabs(
+                windowID: tabs.first?.sourceWindow.cgWindowID ?? tabs.first?.annotation.terminalWindowID,
+                agentTabCount: tabs.count,
                 terminalTabCountByWindowID: terminalTabCountByWindowID
+            ) {
+                scopedWindows.append(window)
+            }
+
+            scopedWindows.append(
+                contentsOf: tabs.map {
+                    virtualAgentWindow(
+                        for: $0,
+                        showAgentTitles: showAgentTitles
+                    )
+                }
             )
+            emittedSourceWindowIDs.insert(window.id)
         }
 
-        let virtualAgentWindows = backedAgentTabs.map { tab in
-            let annotation = tab.annotation
-            let sourceWindow = tab.sourceWindow
-            return WindowInfo(
-                pid: sourceWindow.pid,
-                cgWindowID: nil,
-                provisionalID: virtualWindowID(for: annotation),
-                appName: sourceWindow.appName,
-                title: showAgentTitles ? annotation.friendlyName : sourceWindow.title,
-                icon: sourceWindow.icon,
-                bundleIdentifier: sourceWindow.bundleIdentifier,
-                isMinimized: sourceWindow.isMinimized,
-                isHidden: sourceWindow.isHidden,
-                isProvisional: true
-            )
+        let unplacedAgentTabs = backedAgentTabs.filter {
+            !emittedSourceWindowIDs.contains($0.sourceWindow.id)
         }
+        scopedWindows.append(
+            contentsOf: unplacedAgentTabs.map {
+                virtualAgentWindow(
+                    for: $0,
+                    showAgentTitles: showAgentTitles
+                )
+            }
+        )
 
-        return nonAgentWindows + virtualAgentWindows
+        return scopedWindows
     }
 
     static func virtualWindowID(for annotation: SMAgentWindowAnnotation) -> String {
@@ -117,8 +124,29 @@ struct SMTaskWindowPlanner {
         }
     }
 
+    private static func virtualAgentWindow(
+        for tab: BackedAgentTab,
+        showAgentTitles: Bool
+    ) -> WindowInfo {
+        let annotation = tab.annotation
+        let sourceWindow = tab.sourceWindow
+
+        return WindowInfo(
+            pid: sourceWindow.pid,
+            cgWindowID: nil,
+            provisionalID: virtualWindowID(for: annotation),
+            appName: sourceWindow.appName,
+            title: showAgentTitles ? annotation.friendlyName : sourceWindow.title,
+            icon: sourceWindow.icon,
+            bundleIdentifier: sourceWindow.bundleIdentifier,
+            isMinimized: sourceWindow.isMinimized,
+            isHidden: sourceWindow.isHidden,
+            isProvisional: true
+        )
+    }
+
     private static func terminalWindowHasNonAgentTabs(
-        windowID: CGWindowID,
+        windowID: CGWindowID?,
         agentTabCount: Int,
         terminalTabCountByWindowID: [CGWindowID: Int]
     ) -> Bool {
@@ -126,7 +154,10 @@ struct SMTaskWindowPlanner {
             return false
         }
 
-        guard let terminalTabCount = terminalTabCountByWindowID[windowID] else {
+        guard
+            let windowID,
+            let terminalTabCount = terminalTabCountByWindowID[windowID]
+        else {
             return true
         }
 
