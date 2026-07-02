@@ -20,6 +20,7 @@ func smPluginMatchesLegacyPythonSMWatchEntrypoint() {
 func smPluginRejectsOtherWatchCommands() {
     #expect(!SMPluginService.commandLooksLikeSMWatch("watch ls"))
     #expect(!SMPluginService.commandLooksLikeSMWatch("sm status"))
+    #expect(!SMPluginService.commandLooksLikeSMWatch("node /Users/rajesh/projects/session-manager/web/watch.js watch"))
 }
 
 @Test

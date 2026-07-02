@@ -275,6 +275,7 @@ private struct SMSessionMappingIdentity: Hashable {
 private enum SMPluginRefreshResult {
     case mapped(SMPluginRefreshPayload<SMAgentTabFetchSnapshot>)
     case sessions(SMPluginRefreshPayload<[SMSessionSnapshot]>)
+    case sessionsWithoutTerminal(SMPluginRefreshPayload<[SMSessionSnapshot]>)
     case clear
     case failed
 }
@@ -589,6 +590,13 @@ final class SMPluginService: ObservableObject {
                         self.lastTmuxClientEventVersion = eventVersion
                     }
                     self.applySessionSnapshot(payload.value)
+                case .sessionsWithoutTerminal(let payload):
+                    if let eventVersion = payload.tmuxClientEventVersion {
+                        self.lastTmuxClientEventVersion = eventVersion
+                    }
+                    self.lastTerminalMappingRefreshAt = nil
+                    self.lastMappedSessionIdentities = []
+                    self.applyTerminalUnavailableSessionSnapshot(payload.value)
                 case .clear:
                     self.lastTerminalMappingRefreshAt = nil
                     self.lastMappedSessionIdentities = []
@@ -646,7 +654,10 @@ final class SMPluginService: ObservableObject {
             isTerminalRunning
         }
         guard terminalIsRunning else {
-            return .clear
+            return .sessionsWithoutTerminal(SMPluginRefreshPayload(
+                value: sessions,
+                tmuxClientEventVersion: eventVersion
+            ))
         }
 
         guard let snapshot = await fetchAgentTabAnnotations(for: sessions) else {
@@ -759,6 +770,27 @@ final class SMPluginService: ObservableObject {
         let selectedWindowAnnotations = Self.selectedWindowAnnotations(from: sortedAnnotations)
         if windowAnnotations != selectedWindowAnnotations {
             windowAnnotations = selectedWindowAnnotations
+        }
+    }
+
+    private func applyTerminalUnavailableSessionSnapshot(_ sessions: [SMSessionSnapshot]) {
+        let summary = SMWatchSummary(sessions: sessions)
+        if watchSummary != summary {
+            watchSummary = summary
+        }
+
+        lastObservedAgentTabAtBySessionID = [:]
+        if windowAnnotations != [:] {
+            windowAnnotations = [:]
+        }
+        if agentTabs != [] {
+            agentTabs = []
+        }
+        if watchWindows != [] {
+            watchWindows = []
+        }
+        if terminalTabCountByWindowID != [:] {
+            terminalTabCountByWindowID = [:]
         }
     }
 
@@ -1458,17 +1490,46 @@ final class SMPluginService: ObservableObject {
             .map { cleanShellToken(String($0)) }
             .filter { !$0.isEmpty }
 
-        guard let watchIndex = tokens.firstIndex(of: "watch") else {
-            return false
+        for index in tokens.indices {
+            let token = tokens[index]
+            let executableName = (token as NSString).lastPathComponent
+            if executableName == "sm",
+               commandToken(after: index, in: tokens) == "watch" {
+                return true
+            }
+
+            if isLegacySMWatchEntrypoint(token),
+               commandToken(after: index, in: tokens) == "watch" {
+                return true
+            }
         }
 
-        let precedingTokens = tokens[..<watchIndex]
-        return precedingTokens.contains { token in
-            let executableName = (token as NSString).lastPathComponent
-            return executableName == "sm" ||
-                token.hasSuffix("/sm") ||
-                token.contains("session-manager")
+        return false
+    }
+
+    private nonisolated static func isLegacySMWatchEntrypoint(_ token: String) -> Bool {
+        let normalized = token.replacingOccurrences(of: "\\", with: "/")
+        return normalized.hasSuffix("/session-manager/src/cli/main.py") ||
+            normalized.hasSuffix("/session-manager/src/cli/commands.py") ||
+            normalized.hasSuffix("/session-manager/src/cli/watch_tui.py")
+    }
+
+    private nonisolated static func commandToken(after index: Int, in tokens: [String]) -> String? {
+        var tokenIndex = index + 1
+        while tokenIndex < tokens.count {
+            let token = tokens[tokenIndex]
+            if token == "--api-url", tokenIndex + 1 < tokens.count {
+                tokenIndex += 2
+                continue
+            }
+            if token.hasPrefix("--api-url=") {
+                tokenIndex += 1
+                continue
+            }
+            return token
         }
+
+        return nil
     }
 
     nonisolated static func tmuxAttachTarget(in command: String) -> String? {
