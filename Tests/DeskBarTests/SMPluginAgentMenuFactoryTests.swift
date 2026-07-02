@@ -4,6 +4,25 @@ import Testing
 @testable import DeskBar
 
 @Test
+func smPluginMatchesDirectSMWatchCommand() {
+    #expect(SMPluginService.commandLooksLikeSMWatch("sm watch"))
+    #expect(SMPluginService.commandLooksLikeSMWatch("/opt/homebrew/bin/sm --api-url http://127.0.0.1:8420 watch"))
+}
+
+@Test
+func smPluginMatchesLegacyPythonSMWatchEntrypoint() {
+    let command = "python /Users/rajesh/projects/session-manager/src/cli/main.py watch --repo deskbar"
+
+    #expect(SMPluginService.commandLooksLikeSMWatch(command))
+}
+
+@Test
+func smPluginRejectsOtherWatchCommands() {
+    #expect(!SMPluginService.commandLooksLikeSMWatch("watch ls"))
+    #expect(!SMPluginService.commandLooksLikeSMWatch("sm status"))
+}
+
+@Test
 func smAgentMenuIncludesCopySessionIDCommand() {
     let annotation = SMAgentWindowAnnotation(
         sessionID: "session-123",

@@ -121,6 +121,20 @@ class TaskbarSettings: ObservableObject {
         }
     }
 
+    @Published var showSessionManagerWidget: Bool {
+        didSet { defaults.set(showSessionManagerWidget, forKey: "showSessionManagerWidget") }
+    }
+
+    @Published var sessionManagerWidgetPinnedDisplayID: CGDirectDisplayID? {
+        didSet {
+            if let sessionManagerWidgetPinnedDisplayID {
+                defaults.set(Int(sessionManagerWidgetPinnedDisplayID), forKey: "sessionManagerWidgetPinnedDisplayID")
+            } else {
+                defaults.removeObject(forKey: "sessionManagerWidgetPinnedDisplayID")
+            }
+        }
+    }
+
     @Published var startAtLogin: Bool {
         didSet { defaults.set(startAtLogin, forKey: "startAtLogin") }
     }
@@ -201,6 +215,12 @@ class TaskbarSettings: ObservableObject {
             systemResourceWidgetPinnedDisplayID = CGDirectDisplayID(pinnedDisplayID.uint32Value)
         } else {
             systemResourceWidgetPinnedDisplayID = nil
+        }
+        showSessionManagerWidget = defaults.object(forKey: "showSessionManagerWidget") as? Bool ?? true
+        if let pinnedDisplayID = defaults.object(forKey: "sessionManagerWidgetPinnedDisplayID") as? NSNumber {
+            sessionManagerWidgetPinnedDisplayID = CGDirectDisplayID(pinnedDisplayID.uint32Value)
+        } else {
+            sessionManagerWidgetPinnedDisplayID = nil
         }
         startAtLogin = defaults.object(forKey: "startAtLogin") as? Bool ?? false
         showOnAllMonitors = defaults.object(forKey: "showOnAllMonitors") as? Bool ?? true

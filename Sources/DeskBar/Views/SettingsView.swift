@@ -51,6 +51,8 @@ final class SettingsView: NSView {
     private let showSystemResourceCPUMetricCheckbox = NSButton(checkboxWithTitle: "CPU usage", target: nil, action: nil)
     private let showSystemResourceGPUMetricCheckbox = NSButton(checkboxWithTitle: "GPU usage", target: nil, action: nil)
     private let systemResourceWidgetDisplayPopupButton = NSPopUpButton()
+    private let showSessionManagerWidgetCheckbox = NSButton(checkboxWithTitle: "Show SM widget", target: nil, action: nil)
+    private let sessionManagerWidgetDisplayPopupButton = NSPopUpButton()
     private let enableWindowSwitcherCheckbox = NSButton(checkboxWithTitle: "Enable Alt-Tab / Option-Tab window switcher", target: nil, action: nil)
     private let enableBareCommandLauncherCheckbox = NSButton(checkboxWithTitle: "Enable Apps launcher shortcut", target: nil, action: nil)
     private let appsLauncherShortcutPopupButton = NSPopUpButton()
@@ -72,6 +74,7 @@ final class SettingsView: NSView {
     private var blacklistEntries: [AppEntry] = []
     private var addSheetEntries: [AppEntry] = []
     private var widgetDisplayOptions: [CGDirectDisplayID?] = []
+    private var sessionManagerWidgetDisplayOptions: [CGDirectDisplayID?] = []
     private var cancellables = Set<AnyCancellable>()
 
     init(
@@ -111,6 +114,7 @@ final class SettingsView: NSView {
         layoutModePopupButton.addItems(withTitles: ["Full Width", "Full Width Glass", "Compact Centered", "Compact Glass"])
         appsLauncherShortcutPopupButton.addItems(withTitles: ["Control-Option-Return", "Option-Space", "Control-Option-Space", "Tap Command"])
         configureWidgetDisplayPopupButton()
+        configureSessionManagerWidgetDisplayPopupButton()
         configureLauncherTableView()
         configureBlacklistTableView()
 
@@ -159,7 +163,9 @@ final class SettingsView: NSView {
             makeLabeledControlRow(label: "Show on", control: systemResourceWidgetDisplayPopupButton),
             makeCheckboxRow(showSystemResourceMemoryMetricCheckbox),
             makeCheckboxRow(showSystemResourceCPUMetricCheckbox),
-            makeCheckboxRow(showSystemResourceGPUMetricCheckbox)
+            makeCheckboxRow(showSystemResourceGPUMetricCheckbox),
+            makeCheckboxRow(showSessionManagerWidgetCheckbox),
+            makeLabeledControlRow(label: "SM widget show on", control: sessionManagerWidgetDisplayPopupButton)
         ])
 
         let pluginsTab = NSTabViewItem(identifier: "plugins")
@@ -206,6 +212,31 @@ final class SettingsView: NSView {
            !widgetDisplayOptions.contains(where: { $0 == pinnedDisplayID }) {
             widgetDisplayOptions.append(pinnedDisplayID)
             systemResourceWidgetDisplayPopupButton.addItem(withTitle: "Display \(pinnedDisplayID) (Disconnected)")
+        }
+    }
+
+    private func configureSessionManagerWidgetDisplayPopupButton() {
+        sessionManagerWidgetDisplayPopupButton.removeAllItems()
+        sessionManagerWidgetDisplayOptions = [nil]
+        sessionManagerWidgetDisplayPopupButton.addItem(withTitle: "All Displays")
+
+        let screenOptions = NSScreen.screens.compactMap { screen -> (String, CGDirectDisplayID)? in
+            guard let displayID = ScreenGeometry.displayID(for: screen) else {
+                return nil
+            }
+
+            return ("\(screen.localizedName) (\(displayID))", displayID)
+        }
+
+        for (title, displayID) in screenOptions {
+            sessionManagerWidgetDisplayOptions.append(displayID)
+            sessionManagerWidgetDisplayPopupButton.addItem(withTitle: title)
+        }
+
+        if let pinnedDisplayID = settings.sessionManagerWidgetPinnedDisplayID,
+           !sessionManagerWidgetDisplayOptions.contains(where: { $0 == pinnedDisplayID }) {
+            sessionManagerWidgetDisplayOptions.append(pinnedDisplayID)
+            sessionManagerWidgetDisplayPopupButton.addItem(withTitle: "Display \(pinnedDisplayID) (Disconnected)")
         }
     }
 
@@ -338,6 +369,12 @@ final class SettingsView: NSView {
 
         systemResourceWidgetDisplayPopupButton.target = self
         systemResourceWidgetDisplayPopupButton.action = #selector(systemResourceWidgetDisplayChanged(_:))
+
+        showSessionManagerWidgetCheckbox.target = self
+        showSessionManagerWidgetCheckbox.action = #selector(showSessionManagerWidgetChanged(_:))
+
+        sessionManagerWidgetDisplayPopupButton.target = self
+        sessionManagerWidgetDisplayPopupButton.action = #selector(sessionManagerWidgetDisplayChanged(_:))
 
         enableWindowSwitcherCheckbox.target = self
         enableWindowSwitcherCheckbox.action = #selector(enableWindowSwitcherChanged(_:))
@@ -564,11 +601,28 @@ final class SettingsView: NSView {
             }
             .store(in: &cancellables)
 
+        settings.$showSessionManagerWidget
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.showSessionManagerWidgetCheckbox.state = value ? .on : .off
+                self?.updateWidgetControlsState()
+            }
+            .store(in: &cancellables)
+
+        settings.$sessionManagerWidgetPinnedDisplayID
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateSessionManagerWidgetDisplayPopupSelection()
+            }
+            .store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.configureWidgetDisplayPopupButton()
                 self?.updateWidgetDisplayPopupSelection()
+                self?.configureSessionManagerWidgetDisplayPopupButton()
+                self?.updateSessionManagerWidgetDisplayPopupSelection()
             }
             .store(in: &cancellables)
 
@@ -611,6 +665,7 @@ final class SettingsView: NSView {
             .sink { [weak self] value in
                 self?.enableSessionManagerPluginCheckbox.state = value ? .on : .off
                 self?.updateSessionManagerPluginControlsState()
+                self?.updateWidgetControlsState()
             }
             .store(in: &cancellables)
 
@@ -931,6 +986,10 @@ final class SettingsView: NSView {
         showSystemResourceMemoryMetricCheckbox.isEnabled = isEnabled
         showSystemResourceCPUMetricCheckbox.isEnabled = isEnabled
         showSystemResourceGPUMetricCheckbox.isEnabled = isEnabled
+
+        let isSMWidgetEnabled = settings.enableSessionManagerPlugin && settings.showSessionManagerWidget
+        showSessionManagerWidgetCheckbox.isEnabled = settings.enableSessionManagerPlugin
+        sessionManagerWidgetDisplayPopupButton.isEnabled = isSMWidgetEnabled
     }
 
     private func updateSessionManagerPluginControlsState() {
@@ -951,6 +1010,18 @@ final class SettingsView: NSView {
         } ?? 0
 
         systemResourceWidgetDisplayPopupButton.selectItem(at: selectedIndex)
+        updateWidgetControlsState()
+    }
+
+    private func updateSessionManagerWidgetDisplayPopupSelection() {
+        configureSessionManagerWidgetDisplayPopupButton()
+
+        let selectedDisplayID = settings.sessionManagerWidgetPinnedDisplayID
+        let selectedIndex = sessionManagerWidgetDisplayOptions.firstIndex { option in
+            option == selectedDisplayID
+        } ?? 0
+
+        sessionManagerWidgetDisplayPopupButton.selectItem(at: selectedIndex)
         updateWidgetControlsState()
     }
 
@@ -1241,6 +1312,21 @@ final class SettingsView: NSView {
         }
 
         settings.systemResourceWidgetPinnedDisplayID = widgetDisplayOptions[sender.indexOfSelectedItem]
+    }
+
+    @objc
+    private func showSessionManagerWidgetChanged(_ sender: NSButton) {
+        settings.showSessionManagerWidget = sender.state == .on
+    }
+
+    @objc
+    private func sessionManagerWidgetDisplayChanged(_ sender: NSPopUpButton) {
+        guard sessionManagerWidgetDisplayOptions.indices.contains(sender.indexOfSelectedItem) else {
+            settings.sessionManagerWidgetPinnedDisplayID = nil
+            return
+        }
+
+        settings.sessionManagerWidgetPinnedDisplayID = sessionManagerWidgetDisplayOptions[sender.indexOfSelectedItem]
     }
 
     @objc

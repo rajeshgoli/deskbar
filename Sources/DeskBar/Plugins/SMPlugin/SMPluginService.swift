@@ -104,6 +104,121 @@ struct SMAgentWindowAnnotation: Equatable {
     }
 }
 
+struct SMWatchSummary: Equatable {
+    let workingCount: Int
+    let thinkingCount: Int
+    let waitingPermissionCount: Int
+    let waitingInputCount: Int
+    let idleCount: Int
+    let stoppedCount: Int
+    let totalCount: Int
+
+    static let empty = SMWatchSummary(
+        workingCount: 0,
+        thinkingCount: 0,
+        waitingPermissionCount: 0,
+        waitingInputCount: 0,
+        idleCount: 0,
+        stoppedCount: 0,
+        totalCount: 0
+    )
+
+    init(sessions: [SMSessionSnapshot]) {
+        var workingCount = 0
+        var thinkingCount = 0
+        var waitingPermissionCount = 0
+        var waitingInputCount = 0
+        var idleCount = 0
+        var stoppedCount = 0
+
+        for session in sessions {
+            switch session.activityState {
+            case .working:
+                workingCount += 1
+            case .thinking:
+                thinkingCount += 1
+            case .waitingPermission:
+                waitingPermissionCount += 1
+            case .waitingInput:
+                waitingInputCount += 1
+            case .idle:
+                idleCount += 1
+            case .stopped:
+                stoppedCount += 1
+            }
+        }
+
+        self.workingCount = workingCount
+        self.thinkingCount = thinkingCount
+        self.waitingPermissionCount = waitingPermissionCount
+        self.waitingInputCount = waitingInputCount
+        self.idleCount = idleCount
+        self.stoppedCount = stoppedCount
+        totalCount = sessions.count
+    }
+
+    private init(
+        workingCount: Int,
+        thinkingCount: Int,
+        waitingPermissionCount: Int,
+        waitingInputCount: Int,
+        idleCount: Int,
+        stoppedCount: Int,
+        totalCount: Int
+    ) {
+        self.workingCount = workingCount
+        self.thinkingCount = thinkingCount
+        self.waitingPermissionCount = waitingPermissionCount
+        self.waitingInputCount = waitingInputCount
+        self.idleCount = idleCount
+        self.stoppedCount = stoppedCount
+        self.totalCount = totalCount
+    }
+
+    var waitingCount: Int {
+        waitingPermissionCount + waitingInputCount
+    }
+
+    var activeCount: Int {
+        workingCount + waitingCount
+    }
+
+    var inactiveCount: Int {
+        idleCount + stoppedCount
+    }
+
+    var aggregateState: SMAgentActivityState {
+        if workingCount > 0 {
+            return .working
+        }
+        if thinkingCount > 0 {
+            return .thinking
+        }
+        if waitingPermissionCount > 0 {
+            return .waitingPermission
+        }
+        if waitingInputCount > 0 {
+            return .waitingInput
+        }
+        if stoppedCount > 0, totalCount == stoppedCount {
+            return .stopped
+        }
+        return .idle
+    }
+}
+
+struct SMWatchWindowAnnotation: Equatable {
+    let terminalWindowID: CGWindowID
+    let terminalTTY: String
+    let terminalFrame: CGRect?
+    let isSelectedTerminalTab: Bool
+    let summary: SMWatchSummary
+
+    var aggregateState: SMAgentActivityState {
+        summary.aggregateState
+    }
+}
+
 struct SMSessionSnapshot: Equatable {
     let id: String
     let friendlyName: String?
@@ -144,6 +259,8 @@ struct SMTerminalTabSnapshot: Equatable {
 
 private struct SMAgentTabFetchSnapshot {
     let annotations: [SMAgentWindowAnnotation]
+    let watchWindows: [SMWatchWindowAnnotation]
+    let watchSummary: SMWatchSummary
     let liveSessionIDs: Set<String>
     let terminalTabCountByWindowID: [CGWindowID: Int]
     let sessionMappingIdentities: Set<SMSessionMappingIdentity>
@@ -282,6 +399,8 @@ final class SMPluginService: ObservableObject {
 
     @Published private(set) var windowAnnotations: [CGWindowID: SMAgentWindowAnnotation] = [:]
     @Published private(set) var agentTabs: [SMAgentWindowAnnotation] = []
+    @Published private(set) var watchSummary: SMWatchSummary = .empty
+    @Published private(set) var watchWindows: [SMWatchWindowAnnotation] = []
     @Published private(set) var terminalTabCountByWindowID: [CGWindowID: Int] = [:]
 
     private let pollInterval: TimeInterval
@@ -341,6 +460,8 @@ final class SMPluginService: ObservableObject {
             lastTmuxClientEventVersion = nil
             windowAnnotations = [:]
             agentTabs = []
+            watchSummary = .empty
+            watchWindows = []
             terminalTabCountByWindowID = [:]
             lastObservedAgentTabAtBySessionID = [:]
         }
@@ -398,6 +519,8 @@ final class SMPluginService: ObservableObject {
         guard isEnabled else {
             windowAnnotations = [:]
             agentTabs = []
+            watchSummary = .empty
+            watchWindows = []
             terminalTabCountByWindowID = [:]
             return
         }
@@ -473,6 +596,8 @@ final class SMPluginService: ObservableObject {
                     self.lastObservedAgentTabAtBySessionID = [:]
                     self.windowAnnotations = [:]
                     self.agentTabs = []
+                    self.watchSummary = .empty
+                    self.watchWindows = []
                     self.terminalTabCountByWindowID = [:]
                 case .failed:
                     Self.writeDiagnostic("fetch failed; keeping agentTabs=\(self.agentTabs.count)")
@@ -541,6 +666,12 @@ final class SMPluginService: ObservableObject {
     private func applyAgentTabFetchSnapshot(_ snapshot: SMAgentTabFetchSnapshot) {
         let now = Date()
         let liveSessionIDs = snapshot.liveSessionIDs
+        if watchSummary != snapshot.watchSummary {
+            watchSummary = snapshot.watchSummary
+        }
+        if watchWindows != snapshot.watchWindows {
+            watchWindows = snapshot.watchWindows
+        }
         if terminalTabCountByWindowID != snapshot.terminalTabCountByWindowID {
             terminalTabCountByWindowID = snapshot.terminalTabCountByWindowID
         }
@@ -595,8 +726,15 @@ final class SMPluginService: ObservableObject {
             lastObservedAgentTabAtBySessionID = [:]
             windowAnnotations = [:]
             agentTabs = []
+            watchSummary = .empty
+            watchWindows = []
             terminalTabCountByWindowID = [:]
             return
+        }
+
+        let summary = SMWatchSummary(sessions: sessions)
+        if watchSummary != summary {
+            watchSummary = summary
         }
 
         let liveSessionIDs = Set(sessions.map(\.id))
@@ -621,6 +759,27 @@ final class SMPluginService: ObservableObject {
         let selectedWindowAnnotations = Self.selectedWindowAnnotations(from: sortedAnnotations)
         if windowAnnotations != selectedWindowAnnotations {
             windowAnnotations = selectedWindowAnnotations
+        }
+    }
+
+    func openOrActivateWatch() {
+        Task.detached(priority: .userInitiated) {
+            let watchWindows = await Self.fetchSMWatchWindowAnnotations(summary: .empty)
+            let target = watchWindows.first(where: \.isSelectedTerminalTab) ?? watchWindows.first
+            if let target {
+                Self.activateTerminalTab(
+                    windowID: target.terminalWindowID,
+                    tty: target.terminalTTY
+                )
+            } else {
+                Self.openSMWatchTerminal()
+            }
+        }
+    }
+
+    func openNewWatchWindow() {
+        Task.detached(priority: .userInitiated) {
+            Self.openSMWatchTerminal()
         }
     }
 
@@ -922,6 +1081,8 @@ final class SMPluginService: ObservableObject {
         guard !sessions.isEmpty else {
             return SMAgentTabFetchSnapshot(
                 annotations: [],
+                watchWindows: [],
+                watchSummary: .empty,
                 liveSessionIDs: [],
                 terminalTabCountByWindowID: [:],
                 sessionMappingIdentities: []
@@ -929,6 +1090,7 @@ final class SMPluginService: ObservableObject {
         }
 
         return await Task.detached(priority: .utility) {
+            let watchSummary = SMWatchSummary(sessions: sessions)
             let sessionMappingIdentities = mappingIdentities(for: sessions)
             guard let terminalTabs = fetchTerminalTabs() else {
                 writeDiagnostic("terminal tabs fetch failed for sessions=\(sessions.count)")
@@ -939,12 +1101,18 @@ final class SMPluginService: ObservableObject {
                 writeDiagnostic("terminal tabs empty for live sessions=\(sessions.count); clearing local annotations")
                 return SMAgentTabFetchSnapshot(
                     annotations: [],
+                    watchWindows: [],
+                    watchSummary: watchSummary,
                     liveSessionIDs: [],
                     terminalTabCountByWindowID: [:],
                     sessionMappingIdentities: []
                 )
             }
             let terminalTabCountByWindowID = terminalTabCountByWindowID(from: terminalTabs)
+            let watchWindows = makeSMWatchWindowAnnotations(
+                terminalTabs: terminalTabs,
+                summary: watchSummary
+            )
 
             let tmuxSessionNames = Set(sessions.map(\.tmuxSession))
             let listedClients = fetchTmuxClients(for: sessions)
@@ -974,6 +1142,8 @@ final class SMPluginService: ObservableObject {
             )
             return SMAgentTabFetchSnapshot(
                 annotations: annotations,
+                watchWindows: watchWindows,
+                watchSummary: watchSummary,
                 liveSessionIDs: Set(sessions.map(\.id)),
                 terminalTabCountByWindowID: terminalTabCountByWindowID,
                 sessionMappingIdentities: sessionMappingIdentities
@@ -1220,6 +1390,87 @@ final class SMPluginService: ObservableObject {
         return clientsByTTY.values.sorted { $0.tty < $1.tty }
     }
 
+    private nonisolated static func fetchSMWatchWindowAnnotations(
+        summary: SMWatchSummary
+    ) async -> [SMWatchWindowAnnotation] {
+        await Task.detached(priority: .utility) {
+            guard let terminalTabs = fetchTerminalTabs() else {
+                return []
+            }
+
+            return makeSMWatchWindowAnnotations(
+                terminalTabs: terminalTabs,
+                summary: summary
+            )
+        }.value
+    }
+
+    private nonisolated static func makeSMWatchWindowAnnotations(
+        terminalTabs: [SMTerminalTabSnapshot],
+        summary: SMWatchSummary
+    ) -> [SMWatchWindowAnnotation] {
+        var annotationsByTTY: [String: SMWatchWindowAnnotation] = [:]
+
+        for terminalTab in terminalTabs {
+            let ttyName = terminalTab.tty.replacingOccurrences(of: "/dev/", with: "")
+            guard !ttyName.isEmpty,
+                  let output = runCommand(
+                    "/bin/ps",
+                    arguments: ["-t", ttyName, "-o", "command="],
+                    timeout: 2.0
+                  )
+            else {
+                continue
+            }
+
+            guard output
+                .split(separator: "\n")
+                .contains(where: { commandLooksLikeSMWatch(String($0)) })
+            else {
+                continue
+            }
+
+            annotationsByTTY[terminalTab.tty] = SMWatchWindowAnnotation(
+                terminalWindowID: terminalTab.windowID,
+                terminalTTY: terminalTab.tty,
+                terminalFrame: terminalTab.frame,
+                isSelectedTerminalTab: terminalTab.isSelected,
+                summary: summary
+            )
+        }
+
+        return annotationsByTTY.values.sorted {
+            if $0.isSelectedTerminalTab != $1.isSelectedTerminalTab {
+                return $0.isSelectedTerminalTab
+            }
+
+            if $0.terminalWindowID != $1.terminalWindowID {
+                return $0.terminalWindowID < $1.terminalWindowID
+            }
+
+            return $0.terminalTTY < $1.terminalTTY
+        }
+    }
+
+    nonisolated static func commandLooksLikeSMWatch(_ command: String) -> Bool {
+        let tokens = command
+            .split(whereSeparator: { $0.isWhitespace })
+            .map { cleanShellToken(String($0)) }
+            .filter { !$0.isEmpty }
+
+        guard let watchIndex = tokens.firstIndex(of: "watch") else {
+            return false
+        }
+
+        let precedingTokens = tokens[..<watchIndex]
+        return precedingTokens.contains { token in
+            let executableName = (token as NSString).lastPathComponent
+            return executableName == "sm" ||
+                token.hasSuffix("/sm") ||
+                token.contains("session-manager")
+        }
+    }
+
     nonisolated static func tmuxAttachTarget(in command: String) -> String? {
         let tokens = command
             .split(whereSeparator: { $0.isWhitespace })
@@ -1422,6 +1673,32 @@ final class SMPluginService: ObservableObject {
             if shouldChangeDirectory then
                 do script "cd " & quoted form of targetDirectory & "; clear" in newTab
             end if
+        end tell
+        """
+
+        _ = runCommand("/usr/bin/osascript", arguments: ["-e", script])
+    }
+
+    private nonisolated static func openSMWatchTerminal(frame: CGRect? = nil) {
+        let boundsScript: String
+        if let frame {
+            let left = Int(frame.minX.rounded())
+            let top = Int(frame.minY.rounded())
+            let right = Int(frame.maxX.rounded())
+            let bottom = Int(frame.maxY.rounded())
+            boundsScript = "set bounds of front window to {\(left), \(top), \(right), \(bottom)}"
+        } else {
+            boundsScript = ""
+        }
+
+        let script = """
+        tell application id "com.apple.Terminal"
+            activate
+            set newTab to do script "sm watch"
+            delay 0.05
+            try
+                \(boundsScript)
+            end try
         end tell
         """
 
