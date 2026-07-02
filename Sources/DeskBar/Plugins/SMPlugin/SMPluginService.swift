@@ -1163,8 +1163,15 @@ final class SMPluginService: ObservableObject {
 
             guard !clients.isEmpty else {
                 let reason = listedClients == nil ? "fetch failed" : "empty"
-                writeDiagnostic("tmux clients \(reason) for live sessions=\(sessions.count); preserving previous annotations")
-                return nil
+                writeDiagnostic("tmux clients \(reason) for live sessions=\(sessions.count); updating SM watch summary")
+                return SMAgentTabFetchSnapshot(
+                    annotations: [],
+                    watchWindows: watchWindows,
+                    watchSummary: watchSummary,
+                    liveSessionIDs: Set(sessions.map(\.id)),
+                    terminalTabCountByWindowID: terminalTabCountByWindowID,
+                    sessionMappingIdentities: sessionMappingIdentities
+                )
             }
 
             let annotations = makeAgentTabAnnotations(
