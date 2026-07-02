@@ -264,6 +264,7 @@ private struct SMAgentTabFetchSnapshot {
     let liveSessionIDs: Set<String>
     let terminalTabCountByWindowID: [CGWindowID: Int]
     let sessionMappingIdentities: Set<SMSessionMappingIdentity>
+    let completedTerminalMapping: Bool
 }
 
 private struct SMSessionMappingIdentity: Hashable {
@@ -582,8 +583,13 @@ final class SMPluginService: ObservableObject {
                     if let eventVersion = payload.tmuxClientEventVersion {
                         self.lastTmuxClientEventVersion = eventVersion
                     }
-                    self.lastTerminalMappingRefreshAt = Date()
-                    self.lastMappedSessionIdentities = payload.value.sessionMappingIdentities
+                    if payload.value.completedTerminalMapping {
+                        self.lastTerminalMappingRefreshAt = Date()
+                        self.lastMappedSessionIdentities = payload.value.sessionMappingIdentities
+                    } else {
+                        self.lastTerminalMappingRefreshAt = nil
+                        self.lastMappedSessionIdentities = []
+                    }
                     self.applyAgentTabFetchSnapshot(payload.value)
                 case .sessions(let payload):
                     if let eventVersion = payload.tmuxClientEventVersion {
@@ -1117,7 +1123,8 @@ final class SMPluginService: ObservableObject {
                 watchSummary: .empty,
                 liveSessionIDs: [],
                 terminalTabCountByWindowID: [:],
-                sessionMappingIdentities: []
+                sessionMappingIdentities: [],
+                completedTerminalMapping: true
             )
         }
 
@@ -1137,7 +1144,8 @@ final class SMPluginService: ObservableObject {
                     watchSummary: watchSummary,
                     liveSessionIDs: [],
                     terminalTabCountByWindowID: [:],
-                    sessionMappingIdentities: []
+                    sessionMappingIdentities: [],
+                    completedTerminalMapping: true
                 )
             }
             let terminalTabCountByWindowID = terminalTabCountByWindowID(from: terminalTabs)
@@ -1170,7 +1178,8 @@ final class SMPluginService: ObservableObject {
                     watchSummary: watchSummary,
                     liveSessionIDs: Set(sessions.map(\.id)),
                     terminalTabCountByWindowID: terminalTabCountByWindowID,
-                    sessionMappingIdentities: sessionMappingIdentities
+                    sessionMappingIdentities: sessionMappingIdentities,
+                    completedTerminalMapping: listedClients != nil
                 )
             }
 
@@ -1185,7 +1194,8 @@ final class SMPluginService: ObservableObject {
                 watchSummary: watchSummary,
                 liveSessionIDs: Set(sessions.map(\.id)),
                 terminalTabCountByWindowID: terminalTabCountByWindowID,
-                sessionMappingIdentities: sessionMappingIdentities
+                sessionMappingIdentities: sessionMappingIdentities,
+                completedTerminalMapping: true
             )
         }.value
     }
