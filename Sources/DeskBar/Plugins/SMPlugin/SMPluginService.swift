@@ -250,6 +250,11 @@ struct SMTmuxClientSnapshot: Equatable {
     let tmuxSession: String
 }
 
+private struct SMTmuxClientFetchResult {
+    let clients: [SMTmuxClientSnapshot]
+    let completed: Bool
+}
+
 struct SMTerminalTabSnapshot: Equatable {
     let windowID: CGWindowID
     let tty: String
@@ -277,6 +282,7 @@ private enum SMPluginRefreshResult {
     case mapped(SMPluginRefreshPayload<SMAgentTabFetchSnapshot>)
     case sessions(SMPluginRefreshPayload<[SMSessionSnapshot]>)
     case sessionsWithoutTerminal(SMPluginRefreshPayload<[SMSessionSnapshot]>)
+    case watchOnly(SMPluginRefreshPayload<[SMWatchWindowAnnotation]>)
     case clear
     case failed
 }
@@ -284,6 +290,11 @@ private enum SMPluginRefreshResult {
 private struct SMPluginRefreshPayload<Value> {
     let value: Value
     let tmuxClientEventVersion: Int?
+}
+
+struct SMAgentAnnotationMergeResult {
+    let annotations: [SMAgentWindowAnnotation]
+    let lastObservedAtBySessionID: [String: Date]
 }
 
 enum SMPluginAgentMenuAction {
@@ -390,7 +401,7 @@ final class SMPluginService: ObservableObject {
     nonisolated static let terminalBundleIdentifier = "com.apple.Terminal"
     private nonisolated static let commandTimeout: TimeInterval = 2.0
     private nonisolated static let refreshStaleTimeout: TimeInterval = 20.0
-    private nonisolated static let terminalMappingRefreshInterval: TimeInterval = 300.0
+    private nonisolated static let terminalMappingRefreshInterval: TimeInterval = 5.0
     private nonisolated static let retireTimeout: TimeInterval = 30.0
     private nonisolated static let staleAnnotationRetention: TimeInterval = 60.0
     private nonisolated static let diagnosticLogURL = URL(fileURLWithPath: "/tmp/deskbar-sm-plugin.log")
@@ -603,6 +614,13 @@ final class SMPluginService: ObservableObject {
                     self.lastTerminalMappingRefreshAt = nil
                     self.lastMappedSessionIdentities = []
                     self.applyTerminalUnavailableSessionSnapshot(payload.value)
+                case .watchOnly(let payload):
+                    if let eventVersion = payload.tmuxClientEventVersion {
+                        self.lastTmuxClientEventVersion = eventVersion
+                    }
+                    self.lastTerminalMappingRefreshAt = nil
+                    self.lastMappedSessionIdentities = []
+                    self.applyWatchOnlySnapshot(payload.value)
                 case .clear:
                     self.lastTerminalMappingRefreshAt = nil
                     self.lastMappedSessionIdentities = []
@@ -635,7 +653,22 @@ final class SMPluginService: ObservableObject {
         let eventVersion = eventState?.tmuxClientEventVersion
 
         guard !sessions.isEmpty else {
-            return .clear
+            let terminalIsRunning = await MainActor.run {
+                isTerminalRunning
+            }
+            guard terminalIsRunning else {
+                return .clear
+            }
+
+            let watchWindows = await fetchSMWatchWindowAnnotations(summary: .empty)
+            guard !watchWindows.isEmpty else {
+                return .clear
+            }
+
+            return .watchOnly(SMPluginRefreshPayload(
+                value: watchWindows,
+                tmuxClientEventVersion: eventVersion
+            ))
         }
 
         let sessionMappingIdentities = mappingIdentities(for: sessions)
@@ -692,42 +725,17 @@ final class SMPluginService: ObservableObject {
         if terminalTabCountByWindowID != snapshot.terminalTabCountByWindowID {
             terminalTabCountByWindowID = snapshot.terminalTabCountByWindowID
         }
-        let freshAnnotationsBySessionID = Dictionary(
-            preservingFirstValues: snapshot.annotations.map { ($0.sessionID, $0) }
+        let mergeResult = Self.mergedAgentAnnotations(
+            liveSessionIDs: liveSessionIDs,
+            freshAnnotations: snapshot.annotations,
+            previousAnnotations: agentTabs,
+            lastObservedAtBySessionID: lastObservedAgentTabAtBySessionID,
+            now: now,
+            retainsMissingAnnotations: !snapshot.completedTerminalMapping
         )
-        let previousAnnotationsBySessionID = Dictionary(
-            preservingFirstValues: agentTabs.map { ($0.sessionID, $0) }
-        )
+        lastObservedAgentTabAtBySessionID = mergeResult.lastObservedAtBySessionID
 
-        var mergedAnnotationsBySessionID: [String: SMAgentWindowAnnotation] = [:]
-        for sessionID in liveSessionIDs {
-            if let freshAnnotation = freshAnnotationsBySessionID[sessionID] {
-                mergedAnnotationsBySessionID[sessionID] = freshAnnotation
-                lastObservedAgentTabAtBySessionID[sessionID] = now
-                continue
-            }
-
-            guard
-                let previousAnnotation = previousAnnotationsBySessionID[sessionID]
-            else {
-                continue
-            }
-
-            let lastObservedAt = lastObservedAgentTabAtBySessionID[sessionID] ?? now
-            guard now.timeIntervalSince(lastObservedAt) <= Self.staleAnnotationRetention else {
-                continue
-            }
-
-            mergedAnnotationsBySessionID[sessionID] = previousAnnotation
-            lastObservedAgentTabAtBySessionID[sessionID] = lastObservedAt
-        }
-
-        lastObservedAgentTabAtBySessionID = lastObservedAgentTabAtBySessionID.filter { sessionID, lastObservedAt in
-            liveSessionIDs.contains(sessionID) &&
-                now.timeIntervalSince(lastObservedAt) <= Self.staleAnnotationRetention
-        }
-
-        let mergedAnnotations = Self.sortedAnnotations(Array(mergedAnnotationsBySessionID.values))
+        let mergedAnnotations = mergeResult.annotations
         if agentTabs != mergedAnnotations {
             agentTabs = mergedAnnotations
         }
@@ -736,6 +744,52 @@ final class SMPluginService: ObservableObject {
         if windowAnnotations != selectedWindowAnnotations {
             windowAnnotations = selectedWindowAnnotations
         }
+    }
+
+    nonisolated static func mergedAgentAnnotations(
+        liveSessionIDs: Set<String>,
+        freshAnnotations: [SMAgentWindowAnnotation],
+        previousAnnotations: [SMAgentWindowAnnotation],
+        lastObservedAtBySessionID: [String: Date],
+        now: Date,
+        retainsMissingAnnotations: Bool
+    ) -> SMAgentAnnotationMergeResult {
+        let freshAnnotationsBySessionID = Dictionary(
+            preservingFirstValues: freshAnnotations.map { ($0.sessionID, $0) }
+        )
+        let previousAnnotationsBySessionID = Dictionary(
+            preservingFirstValues: previousAnnotations.map { ($0.sessionID, $0) }
+        )
+
+        var mergedAnnotationsBySessionID: [String: SMAgentWindowAnnotation] = [:]
+        var updatedLastObservedAtBySessionID: [String: Date] = [:]
+        for sessionID in liveSessionIDs {
+            if let freshAnnotation = freshAnnotationsBySessionID[sessionID] {
+                mergedAnnotationsBySessionID[sessionID] = freshAnnotation
+                updatedLastObservedAtBySessionID[sessionID] = now
+                continue
+            }
+
+            guard
+                retainsMissingAnnotations,
+                let previousAnnotation = previousAnnotationsBySessionID[sessionID]
+            else {
+                continue
+            }
+
+            let lastObservedAt = lastObservedAtBySessionID[sessionID] ?? now
+            guard now.timeIntervalSince(lastObservedAt) <= staleAnnotationRetention else {
+                continue
+            }
+
+            mergedAnnotationsBySessionID[sessionID] = previousAnnotation
+            updatedLastObservedAtBySessionID[sessionID] = lastObservedAt
+        }
+
+        return SMAgentAnnotationMergeResult(
+            annotations: sortedAnnotations(Array(mergedAnnotationsBySessionID.values)),
+            lastObservedAtBySessionID: updatedLastObservedAtBySessionID
+        )
     }
 
     private func applySessionSnapshot(_ sessions: [SMSessionSnapshot]) {
@@ -794,6 +848,25 @@ final class SMPluginService: ObservableObject {
         }
         if watchWindows != [] {
             watchWindows = []
+        }
+        if terminalTabCountByWindowID != [:] {
+            terminalTabCountByWindowID = [:]
+        }
+    }
+
+    private func applyWatchOnlySnapshot(_ watchWindowAnnotations: [SMWatchWindowAnnotation]) {
+        lastObservedAgentTabAtBySessionID = [:]
+        if windowAnnotations != [:] {
+            windowAnnotations = [:]
+        }
+        if agentTabs != [] {
+            agentTabs = []
+        }
+        if watchSummary != .empty {
+            watchSummary = .empty
+        }
+        if watchWindows != watchWindowAnnotations {
+            watchWindows = watchWindowAnnotations
         }
         if terminalTabCountByWindowID != [:] {
             terminalTabCountByWindowID = [:]
@@ -1155,9 +1228,9 @@ final class SMPluginService: ObservableObject {
             )
 
             let tmuxSessionNames = Set(sessions.map(\.tmuxSession))
-            let listedClients = fetchTmuxClients(for: sessions)
+            let listedClientResult = fetchTmuxClients(for: sessions)
             var clientsByTTY = Dictionary(
-                preservingFirstValues: (listedClients ?? []).map { ($0.tty, $0) }
+                preservingFirstValues: listedClientResult.clients.map { ($0.tty, $0) }
             )
             let terminalTabClients = fetchTmuxClientsFromTerminalTabs(
                 terminalTabs,
@@ -1170,7 +1243,7 @@ final class SMPluginService: ObservableObject {
             let clients = clientsByTTY.values.sorted { $0.tty < $1.tty }
 
             guard !clients.isEmpty else {
-                let reason = listedClients == nil ? "fetch failed" : "empty"
+                let reason = listedClientResult.completed ? "empty" : "fetch failed"
                 writeDiagnostic("tmux clients \(reason) for live sessions=\(sessions.count); updating SM watch summary")
                 return SMAgentTabFetchSnapshot(
                     annotations: [],
@@ -1179,7 +1252,7 @@ final class SMPluginService: ObservableObject {
                     liveSessionIDs: Set(sessions.map(\.id)),
                     terminalTabCountByWindowID: terminalTabCountByWindowID,
                     sessionMappingIdentities: sessionMappingIdentities,
-                    completedTerminalMapping: listedClients != nil
+                    completedTerminalMapping: listedClientResult.completed
                 )
             }
 
@@ -1195,7 +1268,7 @@ final class SMPluginService: ObservableObject {
                 liveSessionIDs: Set(sessions.map(\.id)),
                 terminalTabCountByWindowID: terminalTabCountByWindowID,
                 sessionMappingIdentities: sessionMappingIdentities,
-                completedTerminalMapping: true
+                completedTerminalMapping: listedClientResult.completed
             )
         }.value
     }
@@ -1265,7 +1338,7 @@ final class SMPluginService: ObservableObject {
         }
     }
 
-    private nonisolated static func fetchTmuxClients(for sessions: [SMSessionSnapshot]) -> [SMTmuxClientSnapshot]? {
+    private nonisolated static func fetchTmuxClients(for sessions: [SMSessionSnapshot]) -> SMTmuxClientFetchResult {
         let tmuxSessionNames = Set(sessions.map(\.tmuxSession))
         let socketNames = Set(sessions.map(\.tmuxSocketName))
         var clients: [SMTmuxClientSnapshot] = []
@@ -1281,16 +1354,16 @@ final class SMPluginService: ObservableObject {
 
         let matchingClients = clients.filter { tmuxSessionNames.contains($0.tmuxSession) }
         if !matchingClients.isEmpty {
-            return matchingClients
+            return SMTmuxClientFetchResult(clients: matchingClients, completed: !hadCommandFailure)
         }
 
         let processClients = fetchTmuxClientsFromProcessTable(matching: tmuxSessionNames)
         if !processClients.isEmpty {
             writeDiagnostic("using process-table tmux clients=\(processClients.count) after list-clients=\(clients.count)")
-            return processClients
+            return SMTmuxClientFetchResult(clients: processClients, completed: !hadCommandFailure)
         }
 
-        return hadCommandFailure ? nil : []
+        return SMTmuxClientFetchResult(clients: [], completed: !hadCommandFailure)
     }
 
     private nonisolated static func fetchTmuxClients(socketName: String?) -> [SMTmuxClientSnapshot]? {
@@ -1472,10 +1545,10 @@ final class SMPluginService: ObservableObject {
                 continue
             }
 
-            guard output
+            let commands = output
                 .split(separator: "\n")
-                .contains(where: { commandLooksLikeSMWatch(String($0)) })
-            else {
+                .map(String.init)
+            guard commandsLookLikeNakedSMWatch(commands) else {
                 continue
             }
 
@@ -1522,6 +1595,14 @@ final class SMPluginService: ObservableObject {
         }
 
         return false
+    }
+
+    nonisolated static func commandsLookLikeNakedSMWatch(_ commands: [String]) -> Bool {
+        guard commands.contains(where: commandLooksLikeSMWatch) else {
+            return false
+        }
+
+        return !commands.contains { tmuxAttachTarget(in: $0) != nil }
     }
 
     private nonisolated static func isLegacySMWatchEntrypoint(_ token: String) -> Bool {
@@ -1587,6 +1668,7 @@ final class SMPluginService: ObservableObject {
 
     private nonisolated static func smExecutablePath() -> String? {
         let candidatePaths = [
+            "/Users/rajesh/projects/session-manager/venv/bin/sm",
             "/Users/rajesh/Desktop/automation/session-manager/venv/bin/sm",
             "/opt/homebrew/bin/sm",
             "/usr/local/bin/sm",
@@ -1758,6 +1840,7 @@ final class SMPluginService: ObservableObject {
     }
 
     private nonisolated static func openSMWatchTerminal(frame: CGRect? = nil) {
+        let commandLiteral = appleScriptStringLiteral(smWatchTerminalCommand())
         let boundsScript: String
         if let frame {
             let left = Int(frame.minX.rounded())
@@ -1772,7 +1855,7 @@ final class SMPluginService: ObservableObject {
         let script = """
         tell application id "com.apple.Terminal"
             activate
-            set newTab to do script "sm watch"
+            set newTab to do script \(commandLiteral)
             delay 0.05
             try
                 \(boundsScript)
@@ -1781,6 +1864,18 @@ final class SMPluginService: ObservableObject {
         """
 
         _ = runCommand("/usr/bin/osascript", arguments: ["-e", script])
+    }
+
+    private nonisolated static func smWatchTerminalCommand() -> String {
+        if let smExecutablePath = smExecutablePath() {
+            return quotedShellArgument(smExecutablePath) + " watch"
+        }
+
+        return "sm watch"
+    }
+
+    private nonisolated static func quotedShellArgument(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     private nonisolated static func retireAgent(sessionID: String) async -> Bool {

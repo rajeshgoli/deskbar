@@ -498,6 +498,14 @@ final class TaskbarContentView: NSView {
             }
             .store(in: &cancellables)
 
+        smPluginService?.$watchWindows
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.rebuildTaskZone()
+                self?.schedulePreferredWidthNotification()
+            }
+            .store(in: &cancellables)
+
         settings.$groupingMode
             .receive(on: RunLoop.main)
             .sink { [weak self] groupingMode in
@@ -1387,13 +1395,88 @@ final class TaskbarContentView: NSView {
     private func smPluginMenuConfiguration(for window: WindowInfo) -> TaskButtonPluginMenuConfiguration? {
         guard
             settings.enableSessionManagerPlugin,
-            settings.enableSessionManagerTerminalActions,
-            let annotation = smAnnotation(for: window)
+            settings.enableSessionManagerTerminalActions
         else {
             return nil
         }
 
+        if let annotation = smAnnotation(for: window) {
+            return smAgentPluginMenuConfiguration(for: annotation)
+        }
+
+        guard let watchAnnotation = smWatchAnnotation(for: window) else {
+            return nil
+        }
+
         return TaskButtonPluginMenuConfiguration(
+            buttonTitle: "sm",
+            tintColor: watchAnnotation.aggregateState.color,
+            showsActionButton: settings.showSessionManagerActionButton,
+            menuProvider: { [weak self] in
+                self?.makeSMWatchMenu(annotation: watchAnnotation) ?? NSMenu()
+            }
+        )
+    }
+
+    private func smWatchAnnotation(for window: WindowInfo) -> SMWatchWindowAnnotation? {
+        guard
+            window.bundleIdentifier == SMPluginService.terminalBundleIdentifier,
+            let cgWindowID = window.cgWindowID
+        else {
+            return nil
+        }
+
+        return smPluginService?.watchWindows.first {
+            $0.terminalWindowID == cgWindowID && $0.isSelectedTerminalTab
+        }
+    }
+
+    private func makeSMWatchMenu(annotation: SMWatchWindowAnnotation) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        menu.addItem(metadataItem("SM Watch"))
+        menu.addItem(metadataItem("Active: \(annotation.summary.activeCount) - Thinking: \(annotation.summary.thinkingCount) - Inactive: \(annotation.summary.inactiveCount)"))
+        menu.addItem(.separator())
+
+        let openItem = NSMenuItem(title: "Open SM Watch", action: #selector(openSMWatch(_:)), keyEquivalent: "")
+        openItem.target = self
+        menu.addItem(openItem)
+
+        let newItem = NSMenuItem(title: "New SM Watch Window", action: #selector(openNewSMWatchWindow(_:)), keyEquivalent: "")
+        newItem.target = self
+        menu.addItem(newItem)
+
+        let refreshItem = NSMenuItem(title: "Refresh", action: #selector(refreshSMPlugin(_:)), keyEquivalent: "")
+        refreshItem.target = self
+        menu.addItem(refreshItem)
+
+        return menu
+    }
+
+    private func metadataItem(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    @objc
+    private func openSMWatch(_ sender: Any?) {
+        smPluginService?.openOrActivateWatch()
+    }
+
+    @objc
+    private func openNewSMWatchWindow(_ sender: Any?) {
+        smPluginService?.openNewWatchWindow()
+    }
+
+    @objc
+    private func refreshSMPlugin(_ sender: Any?) {
+        smPluginService?.refresh(forceTerminalMapping: true)
+    }
+
+    private func smAgentPluginMenuConfiguration(for annotation: SMAgentWindowAnnotation) -> TaskButtonPluginMenuConfiguration {
+        TaskButtonPluginMenuConfiguration(
             buttonTitle: "sm",
             tintColor: annotation.activityState.color,
             showsActionButton: settings.showSessionManagerActionButton,
