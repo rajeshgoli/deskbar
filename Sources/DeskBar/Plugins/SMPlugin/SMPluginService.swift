@@ -1025,20 +1025,29 @@ final class SMPluginService: ObservableObject {
     nonisolated static func makeAgentTabAnnotations(
         sessions: [SMSessionSnapshot],
         tmuxClients: [SMTmuxClientSnapshot],
+        sshAttachSessionIDByTTY: [String: String] = [:],
         terminalTabs: [SMTerminalTabSnapshot]
     ) -> [SMAgentWindowAnnotation] {
         var sessionsByTmuxName: [String: SMSessionSnapshot] = [:]
         sessions.forEach { sessionsByTmuxName[$0.tmuxSession] = $0 }
+        var sessionsByID: [String: SMSessionSnapshot] = [:]
+        sessions.forEach { sessionsByID[$0.id] = $0 }
 
         var tmuxSessionByTTY: [String: String] = [:]
         tmuxClients.forEach { tmuxSessionByTTY[$0.tty] = $0.tmuxSession }
 
         var annotationsBySessionID: [String: SMAgentWindowAnnotation] = [:]
         for terminalTab in terminalTabs {
-            guard
-                let tmuxSession = tmuxSessionByTTY[terminalTab.tty],
-                let session = sessionsByTmuxName[tmuxSession]
-            else {
+            // Prefer the local tmux-client mapping; fall back to a studio SSH
+            // attach whose session id is on the ssh command line.
+            let session: SMSessionSnapshot
+            if let tmuxSession = tmuxSessionByTTY[terminalTab.tty],
+               let tmuxSession = sessionsByTmuxName[tmuxSession] {
+                session = tmuxSession
+            } else if let sessionID = sshAttachSessionIDByTTY[terminalTab.tty],
+                      let sshSession = sessionsByID[sessionID] {
+                session = sshSession
+            } else {
                 continue
             }
 
@@ -1242,7 +1251,14 @@ final class SMPluginService: ObservableObject {
             }
             let clients = clientsByTTY.values.sorted { $0.tty < $1.tty }
 
-            guard !clients.isEmpty else {
+            // Studio sessions attached over SSH show up as a local `ssh` process
+            // running `sm attach|watch <id>` rather than a tmux client, so they
+            // are invisible to the tmux scan above. Map their TTYs directly.
+            let sshAttachSessionIDByTTY = fetchSSHAttachSessionIDsByTTY(
+                matching: Set(sessions.map(\.id))
+            )
+
+            guard !clients.isEmpty || !sshAttachSessionIDByTTY.isEmpty else {
                 let reason = listedClientResult.completed ? "empty" : "fetch failed"
                 writeDiagnostic("tmux clients \(reason) for live sessions=\(sessions.count); updating SM watch summary")
                 return SMAgentTabFetchSnapshot(
@@ -1259,6 +1275,7 @@ final class SMPluginService: ObservableObject {
             let annotations = makeAgentTabAnnotations(
                 sessions: sessions,
                 tmuxClients: clients,
+                sshAttachSessionIDByTTY: sshAttachSessionIDByTTY,
                 terminalTabs: terminalTabs
             )
             return SMAgentTabFetchSnapshot(
@@ -1455,6 +1472,98 @@ final class SMPluginService: ObservableObject {
         return clientsByTTY.values.sorted { $0.tty < $1.tty }
     }
 
+    /// SSH destinations whose `sm attach|watch <id>` sessions run on the studio
+    /// host and should map to the local Terminal tab hosting the ssh client.
+    private nonisolated static let studioSSHHosts: Set<String> = [
+        "studio",
+        "studio.local",
+        "studio-ssh.rajeshgo.li"
+    ]
+
+    /// Scans the process table for local Terminal tabs whose foreground process is
+    /// an `ssh` to a studio host running `sm attach|watch <id>`, mapping the tab's
+    /// TTY to the session id. Only ids present in `liveSessionIDs` are kept.
+    private nonisolated static func fetchSSHAttachSessionIDsByTTY(
+        matching liveSessionIDs: Set<String>
+    ) -> [String: String] {
+        guard
+            !liveSessionIDs.isEmpty,
+            let output = runCommand("/bin/ps", arguments: ["-axo", "tty=,command="])
+        else {
+            return [:]
+        }
+
+        var sessionIDByTTY: [String: String] = [:]
+        for line in output.split(separator: "\n") {
+            let parts = line.split(
+                maxSplits: 1,
+                omittingEmptySubsequences: true,
+                whereSeparator: { $0.isWhitespace }
+            )
+            guard parts.count == 2 else {
+                continue
+            }
+
+            let tty = String(parts[0])
+            guard tty != "??" else {
+                continue
+            }
+
+            let command = String(parts[1])
+            guard let sessionID = sshAttachSessionID(in: command),
+                  liveSessionIDs.contains(sessionID)
+            else {
+                continue
+            }
+
+            let ttyPath = tty.hasPrefix("/dev/") ? tty : "/dev/\(tty)"
+            sessionIDByTTY[ttyPath] = sessionID
+        }
+
+        return sessionIDByTTY
+    }
+
+    /// Extracts the sm session id from a local `ssh <studio-host> ... sm attach|watch <id>`
+    /// command line, or nil when it is not an ssh invocation to a known studio host
+    /// running `sm attach`/`sm watch` against a specific session.
+    nonisolated static func sshAttachSessionID(in command: String) -> String? {
+        let tokens = command
+            .split(whereSeparator: { $0.isWhitespace })
+            .map { cleanShellToken(String($0)) }
+            .filter { !$0.isEmpty }
+
+        guard let sshIndex = tokens.firstIndex(where: { ($0 as NSString).lastPathComponent == "ssh" }) else {
+            return nil
+        }
+
+        let remoteTokens = Array(tokens[(sshIndex + 1)...])
+        guard remoteTokens.contains(where: { isStudioSSHHost($0) }) else {
+            return nil
+        }
+
+        for index in remoteTokens.indices where (remoteTokens[index] as NSString).lastPathComponent == "sm" {
+            guard
+                let verbIndex = commandTokenIndex(after: index, in: remoteTokens),
+                remoteTokens[verbIndex] == "attach" || remoteTokens[verbIndex] == "watch",
+                let idIndex = commandTokenIndex(after: verbIndex, in: remoteTokens)
+            else {
+                continue
+            }
+
+            let sessionID = remoteTokens[idIndex]
+            if !sessionID.isEmpty, !sessionID.hasPrefix("-") {
+                return sessionID
+            }
+        }
+
+        return nil
+    }
+
+    private nonisolated static func isStudioSSHHost(_ token: String) -> Bool {
+        let host = token.contains("@") ? String(token.split(separator: "@").last ?? "") : token
+        return studioSSHHosts.contains(host)
+    }
+
     private nonisolated static func fetchTmuxClientsFromTerminalTabs(
         _ terminalTabs: [SMTerminalTabSnapshot],
         matching tmuxSessionNames: Set<String>,
@@ -1613,6 +1722,12 @@ final class SMPluginService: ObservableObject {
     }
 
     private nonisolated static func commandToken(after index: Int, in tokens: [String]) -> String? {
+        commandTokenIndex(after: index, in: tokens).map { tokens[$0] }
+    }
+
+    /// Index of the next meaningful token after `index`, skipping an `--api-url`
+    /// flag and its value in either `--api-url X` or `--api-url=X` form.
+    private nonisolated static func commandTokenIndex(after index: Int, in tokens: [String]) -> Int? {
         var tokenIndex = index + 1
         while tokenIndex < tokens.count {
             let token = tokens[tokenIndex]
@@ -1624,7 +1739,7 @@ final class SMPluginService: ObservableObject {
                 tokenIndex += 1
                 continue
             }
-            return token
+            return tokenIndex
         }
 
         return nil

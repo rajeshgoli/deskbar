@@ -149,6 +149,66 @@ func smPluginParsesSSHWrappedTmuxAttachTarget() {
     #expect(SMPluginService.tmuxAttachTarget(in: command) == "claude-29d86946")
 }
 
+@Test
+func smPluginParsesStudioSSHAttachSessionID() {
+    #expect(SMPluginService.sshAttachSessionID(in: "ssh studio sm attach claude-1a2b3c4d") == "claude-1a2b3c4d")
+    #expect(SMPluginService.sshAttachSessionID(in: "ssh rajesh@studio.local sm watch codex-9f8e7d6c") == "codex-9f8e7d6c")
+    #expect(
+        SMPluginService.sshAttachSessionID(
+            in: "ssh -tt -o ConnectTimeout=5 studio-ssh.rajeshgo.li sm --api-url http://127.0.0.1:8420 attach claude-42"
+        ) == "claude-42"
+    )
+}
+
+@Test
+func smPluginRejectsNonStudioOrNakedSSHAttach() {
+    // Unknown host must not match.
+    #expect(SMPluginService.sshAttachSessionID(in: "ssh someserver sm attach claude-1a2b3c4d") == nil)
+    // Naked `sm watch` with no session id yields nothing to map.
+    #expect(SMPluginService.sshAttachSessionID(in: "ssh studio sm watch") == nil)
+    // Local tmux attach is handled by tmuxAttachTarget, not this detector.
+    #expect(SMPluginService.sshAttachSessionID(in: "tmux -L session-manager attach -t claude-29d86946") == nil)
+}
+
+@Test
+func smPluginMapsStudioSSHAttachTabToAnnotation() {
+    let session = SMSessionSnapshot(
+        id: "claude-studio-1",
+        friendlyName: "Studio Agent",
+        workingDirectory: "/home/rajesh/proj",
+        node: "studio",
+        provider: "claude",
+        status: "running",
+        activityState: .working,
+        currentTask: nil,
+        agentStatusText: nil,
+        lastToolName: nil,
+        lastActionSummary: nil,
+        tokensUsed: nil,
+        tmuxSession: "claude-studio-1",
+        tmuxSocketName: nil
+    )
+    let terminalTab = SMTerminalTabSnapshot(
+        windowID: 7,
+        tty: "/dev/ttys004",
+        frame: nil,
+        isSelected: true
+    )
+
+    let annotations = SMPluginService.makeAgentTabAnnotations(
+        sessions: [session],
+        tmuxClients: [],
+        sshAttachSessionIDByTTY: ["/dev/ttys004": "claude-studio-1"],
+        terminalTabs: [terminalTab]
+    )
+
+    #expect(annotations.count == 1)
+    #expect(annotations.first?.sessionID == "claude-studio-1")
+    #expect(annotations.first?.terminalWindowID == 7)
+    #expect(annotations.first?.terminalTTY == "/dev/ttys004")
+    #expect(annotations.first?.isLocalTerminalBacked == true)
+}
+
 private func smTestAnnotation(sessionID: String) -> SMAgentWindowAnnotation {
     SMAgentWindowAnnotation(
         sessionID: sessionID,
