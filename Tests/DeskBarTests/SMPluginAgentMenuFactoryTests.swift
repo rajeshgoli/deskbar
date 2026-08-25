@@ -24,6 +24,40 @@ func smPluginRejectsOtherWatchCommands() {
 }
 
 @Test
+func smPluginParsesProcessTableIntoCommandLinesByTTY() {
+    let output = """
+    ttys000 -zsh
+    ttys000 tmux -L session-manager attach-session -t claude-29d86946
+    /dev/ttys001 login -pf rajesh
+    ?? /usr/sbin/some-daemon
+    ttys002 ssh studio sm watch codex-9f8e7d6c
+    """
+
+    let map = SMPluginService.parseProcessCommandLinesByTTY(output)
+
+    // TTY keys are normalized to /dev/<name> paths.
+    #expect(map["/dev/ttys000"] == [
+        "-zsh",
+        "tmux -L session-manager attach-session -t claude-29d86946"
+    ])
+    #expect(map["/dev/ttys001"] == ["login -pf rajesh"])
+    #expect(map["/dev/ttys002"] == ["ssh studio sm watch codex-9f8e7d6c"])
+    // Rows without a controlling terminal (??) are dropped.
+    #expect(map["??"] == nil)
+    #expect(map.count == 3)
+}
+
+@Test
+func smPluginParsesTmuxAttachTargetFromScannedCommandLines() {
+    let output = "ttys004 tmux -L session-manager attach-session -t claude-29d86946\n"
+
+    let map = SMPluginService.parseProcessCommandLinesByTTY(output)
+
+    let command = try! #require(map["/dev/ttys004"]?.first)
+    #expect(SMPluginService.tmuxAttachTarget(in: command) == "claude-29d86946")
+}
+
+@Test
 func smPluginMatchesOnlyNakedSMWatchTerminal() {
     let commands = [
         "login -pf rajesh",

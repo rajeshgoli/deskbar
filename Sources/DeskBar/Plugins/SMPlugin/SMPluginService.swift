@@ -401,7 +401,7 @@ final class SMPluginService: ObservableObject {
     nonisolated static let terminalBundleIdentifier = "com.apple.Terminal"
     private nonisolated static let commandTimeout: TimeInterval = 2.0
     private nonisolated static let refreshStaleTimeout: TimeInterval = 20.0
-    private nonisolated static let terminalMappingRefreshInterval: TimeInterval = 5.0
+    private nonisolated static let terminalMappingRefreshInterval: TimeInterval = 30.0
     private nonisolated static let retireTimeout: TimeInterval = 30.0
     private nonisolated static let staleAnnotationRetention: TimeInterval = 60.0
     private nonisolated static let diagnosticLogURL = URL(fileURLWithPath: "/tmp/deskbar-sm-plugin.log")
@@ -1231,9 +1231,15 @@ final class SMPluginService: ObservableObject {
                 )
             }
             let terminalTabCountByWindowID = terminalTabCountByWindowID(from: terminalTabs)
+
+            // One `ps -axo tty=,command=` scan shared across the watch-window
+            // and tmux-client TTY matching below, replacing the previous
+            // per-tab `ps -t <tty>` forks in each helper.
+            let commandLinesByTTY = fetchProcessCommandLinesByTTY()
             let watchWindows = makeSMWatchWindowAnnotations(
                 terminalTabs: terminalTabs,
-                summary: watchSummary
+                summary: watchSummary,
+                commandLinesByTTY: commandLinesByTTY
             )
 
             let tmuxSessionNames = Set(sessions.map(\.tmuxSession))
@@ -1244,6 +1250,7 @@ final class SMPluginService: ObservableObject {
             let terminalTabClients = fetchTmuxClientsFromTerminalTabs(
                 terminalTabs,
                 matching: tmuxSessionNames,
+                commandLinesByTTY: commandLinesByTTY,
                 shouldWriteEmptyDiagnostic: clientsByTTY.isEmpty
             )
             for client in terminalTabClients {
@@ -1429,6 +1436,49 @@ final class SMPluginService: ObservableObject {
         }
     }
 
+    /// Runs a single `/bin/ps -axo tty=,command=` scan and groups the command
+    /// lines by TTY. Returns `nil` when the `ps` invocation fails so callers can
+    /// distinguish a failed scan from an empty process table. TTY keys are
+    /// normalized to `/dev/<name>` paths so they match `SMTerminalTabSnapshot.tty`.
+    ///
+    /// Collapsing the per-tab `ps -t <tty>` fork loops into this one scan avoids
+    /// spawning one subprocess per terminal tab on every refresh pass, which is
+    /// the main driver of DeskBar's while-awake energy cost.
+    private nonisolated static func fetchProcessCommandLinesByTTY() -> [String: [String]]? {
+        guard let output = runCommand("/bin/ps", arguments: ["-axo", "tty=,command="]) else {
+            return nil
+        }
+
+        return parseProcessCommandLinesByTTY(output)
+    }
+
+    /// Parses `ps -axo tty=,command=` output into a map of `/dev/<tty>` paths to
+    /// their command lines. Rows with no controlling terminal (`??`) are skipped.
+    /// Exposed for unit testing of the single-scan parsing.
+    nonisolated static func parseProcessCommandLinesByTTY(_ output: String) -> [String: [String]] {
+        var commandLinesByTTY: [String: [String]] = [:]
+        for line in output.split(separator: "\n") {
+            let parts = line.split(
+                maxSplits: 1,
+                omittingEmptySubsequences: true,
+                whereSeparator: { $0.isWhitespace }
+            )
+            guard parts.count == 2 else {
+                continue
+            }
+
+            let tty = String(parts[0])
+            guard tty != "??" else {
+                continue
+            }
+
+            let ttyPath = tty.hasPrefix("/dev/") ? tty : "/dev/\(tty)"
+            commandLinesByTTY[ttyPath, default: []].append(String(parts[1]))
+        }
+
+        return commandLinesByTTY
+    }
+
     private nonisolated static func fetchTmuxClientsFromProcessTable(
         matching tmuxSessionNames: Set<String>
     ) -> [SMTmuxClientSnapshot] {
@@ -1567,6 +1617,7 @@ final class SMPluginService: ObservableObject {
     private nonisolated static func fetchTmuxClientsFromTerminalTabs(
         _ terminalTabs: [SMTerminalTabSnapshot],
         matching tmuxSessionNames: Set<String>,
+        commandLinesByTTY: [String: [String]]?,
         shouldWriteEmptyDiagnostic: Bool = true
     ) -> [SMTmuxClientSnapshot] {
         guard !tmuxSessionNames.isEmpty else {
@@ -1583,22 +1634,23 @@ final class SMPluginService: ObservableObject {
                 continue
             }
 
-            guard let output = runCommand(
-                    "/bin/ps",
-                    arguments: ["-t", ttyName, "-o", "command="],
-                    timeout: 2.0
-                  )
-            else {
-                psFailureCount += 1
+            // The single `ps -axo` scan replaces the previous per-tab
+            // `ps -t <tty>` fork. A nil map means that scan failed for every
+            // tab, so preserve the old per-tab failure semantics by counting
+            // one failure per tab we could not resolve.
+            guard let commandLines = commandLinesByTTY?[terminalTab.tty] else {
+                if commandLinesByTTY == nil {
+                    psFailureCount += 1
+                }
                 continue
             }
 
-            for commandLine in output.split(separator: "\n") {
+            for commandLine in commandLines {
                 commandLineCount += 1
                 if commandLine.contains("tmux") {
                     tmuxLineCount += 1
                 }
-                guard let tmuxSession = tmuxAttachTarget(in: String(commandLine)),
+                guard let tmuxSession = tmuxAttachTarget(in: commandLine),
                       tmuxSessionNames.contains(tmuxSession)
                 else {
                     continue
@@ -1631,32 +1683,27 @@ final class SMPluginService: ObservableObject {
 
             return makeSMWatchWindowAnnotations(
                 terminalTabs: terminalTabs,
-                summary: summary
+                summary: summary,
+                commandLinesByTTY: fetchProcessCommandLinesByTTY()
             )
         }.value
     }
 
     private nonisolated static func makeSMWatchWindowAnnotations(
         terminalTabs: [SMTerminalTabSnapshot],
-        summary: SMWatchSummary
+        summary: SMWatchSummary,
+        commandLinesByTTY: [String: [String]]?
     ) -> [SMWatchWindowAnnotation] {
         var annotationsByTTY: [String: SMWatchWindowAnnotation] = [:]
 
         for terminalTab in terminalTabs {
             let ttyName = terminalTab.tty.replacingOccurrences(of: "/dev/", with: "")
             guard !ttyName.isEmpty,
-                  let output = runCommand(
-                    "/bin/ps",
-                    arguments: ["-t", ttyName, "-o", "command="],
-                    timeout: 2.0
-                  )
+                  let commands = commandLinesByTTY?[terminalTab.tty]
             else {
                 continue
             }
 
-            let commands = output
-                .split(separator: "\n")
-                .map(String.init)
             guard commandsLookLikeNakedSMWatch(commands) else {
                 continue
             }
