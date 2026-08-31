@@ -60,6 +60,7 @@ final class TaskbarContentView: NSView {
     private var ungroupedTaskOrderState = TaskZoneOrderingState()
     private var taskItemViews: [String: NSView] = [:]
     private var preferredWidthNotificationScheduled = false
+    private var taskZoneRebuildScheduled = false
     private var lastNotifiedPreferredCompactWidth: CGFloat?
     private var lastAppliedUsesAdaptiveTaskLayout = false
     private var lastAppliedTaskWidthCap: CGFloat?
@@ -428,14 +429,14 @@ final class TaskbarContentView: NSView {
         windowManager.$visibleWindows
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
         windowManager.$focusRevision
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
@@ -443,49 +444,49 @@ final class TaskbarContentView: NSView {
             .receive(on: RunLoop.main)
             .sink { [weak self] badges in
                 self?.handleBadgeUpdates(badges)
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
         appStateMonitor.$states
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
         settings.$enableSessionManagerPlugin
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
         settings.$showSessionManagerAgentTitles
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
         settings.$enableSessionManagerTerminalActions
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
         settings.$showSessionManagerActionButton
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
         smPluginService?.$agentTabs
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
                 self?.schedulePreferredWidthNotification()
             }
             .store(in: &cancellables)
@@ -493,7 +494,7 @@ final class TaskbarContentView: NSView {
         smPluginService?.$terminalTabCountByWindowID
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
                 self?.schedulePreferredWidthNotification()
             }
             .store(in: &cancellables)
@@ -501,7 +502,7 @@ final class TaskbarContentView: NSView {
         smPluginService?.$watchWindows
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
                 self?.schedulePreferredWidthNotification()
             }
             .store(in: &cancellables)
@@ -517,7 +518,7 @@ final class TaskbarContentView: NSView {
                     self.expandedGroupID = nil
                 }
 
-                self.rebuildTaskZone()
+                self.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
@@ -538,21 +539,21 @@ final class TaskbarContentView: NSView {
         settings.$dragReorder
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
         settings.$flashAttentionIndicators
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
         settings.$showProgressIndicators
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
-                self?.rebuildTaskZone()
+                self?.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
@@ -568,7 +569,7 @@ final class TaskbarContentView: NSView {
                     self.appStateMonitor.setActivitySamplingEnabled(false)
                 }
 
-                self.rebuildTaskZone()
+                self.scheduleRebuildTaskZone()
             }
             .store(in: &cancellables)
 
@@ -634,9 +635,31 @@ final class TaskbarContentView: NSView {
             workspaceNotifications.publisher(for: name)
                 .receive(on: RunLoop.main)
                 .sink { [weak self] _ in
-                    self?.rebuildTaskZone()
+                    self?.scheduleRebuildTaskZone()
                 }
                 .store(in: &cancellables)
+        }
+    }
+
+    /// Coalesces task-zone rebuilds to the next main-runloop turn. Many state
+    /// publishers (window/focus changes, badges, app states, SM agent tabs and
+    /// watch windows) can fire in the same runloop cycle; without coalescing each
+    /// emission triggers a full, expensive rebuild (per-button text measurement
+    /// plus dynamic casts), which dominates DeskBar's while-awake energy use.
+    /// Batching a burst into one rebuild collapses that redundant work.
+    private func scheduleRebuildTaskZone() {
+        guard !taskZoneRebuildScheduled else {
+            return
+        }
+
+        taskZoneRebuildScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.taskZoneRebuildScheduled = false
+            self.rebuildTaskZone()
         }
     }
 

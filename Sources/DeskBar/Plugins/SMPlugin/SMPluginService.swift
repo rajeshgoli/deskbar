@@ -2319,6 +2319,13 @@ final class SMPluginService: ObservableObject {
             try? stderr.fileHandleForWriting.close()
         }
 
+        // Signaled from the process's termination handler so the wait below is
+        // event-driven instead of polling. Must be set before `run()`.
+        let terminationSemaphore = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in
+            terminationSemaphore.signal()
+        }
+
         do {
             try process.run()
         } catch {
@@ -2332,21 +2339,20 @@ final class SMPluginService: ObservableObject {
         try? stdout.fileHandleForWriting.close()
         try? stderr.fileHandleForWriting.close()
 
+        // Block until the process exits or the timeout elapses, without polling.
+        // The previous `while isRunning { Thread.sleep(0.02) }` loop woke this
+        // worker thread ~50×/second for every ps/osascript/tmux invocation. With
+        // several commands per refresh pass and passes firing whenever agents are
+        // active, that wakeup storm dominated DeskBar's while-awake energy once
+        // the main-thread rebuild cost was removed. The semaphore wakes the
+        // thread exactly once — on exit or timeout.
         var didTimeOut = false
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-
-        if process.isRunning {
+        if terminationSemaphore.wait(timeout: .now() + timeout) == .timedOut {
             didTimeOut = true
             process.terminate()
-            let terminationDeadline = Date().addingTimeInterval(0.5)
-            while process.isRunning, Date() < terminationDeadline {
-                Thread.sleep(forTimeInterval: 0.02)
-            }
-            if process.isRunning {
+            if terminationSemaphore.wait(timeout: .now() + 0.5) == .timedOut {
                 kill(process.processIdentifier, SIGKILL)
+                terminationSemaphore.wait()
             }
         }
 
