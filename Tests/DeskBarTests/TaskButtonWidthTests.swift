@@ -55,6 +55,22 @@ struct TaskButtonWidthTests {
         #expect(TaskButtonView.minimumAdaptivePluginActionTaskWidth == 32)
     }
 
+    @Test
+    func measuredTextWidthMatchesDirectMeasurementAndCachesRepeatedCalls() {
+        let font = NSFont.systemFont(ofSize: TaskbarSettings.defaultTitleFontSize)
+        let title = "Set up new Mac Studio \(UUID().uuidString)"
+        let expected = (title as NSString).size(withAttributes: [.font: font]).width
+
+        // First call measures; the cached value must match a direct measurement.
+        #expect(TaskButtonView.measuredTextWidth(title, font: font) == expected)
+        // A repeated call (cache hit) returns the identical width.
+        #expect(TaskButtonView.measuredTextWidth(title, font: font) == expected)
+        // A different font size keys separately and stays correct.
+        let largerFont = NSFont.systemFont(ofSize: TaskbarSettings.defaultTitleFontSize + 4)
+        let largerExpected = (title as NSString).size(withAttributes: [.font: largerFont]).width
+        #expect(TaskButtonView.measuredTextWidth(title, font: largerFont) == largerExpected)
+    }
+
     @MainActor
     @Test
     func adaptiveWidthCapHidesInlinePluginActionButton() {

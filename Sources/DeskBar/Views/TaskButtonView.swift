@@ -37,6 +37,49 @@ final class TaskButtonView: NSView, NSDraggingSource {
     static let minimumAdaptivePluginActionTaskWidth: CGFloat = 32
     private static let minimumInlinePluginActionTaskWidth: CGFloat = 72
     private static var activeHoverView: TaskButtonView?
+
+    /// Memoizes `NSString.size(withAttributes:)` results. Title measurement is
+    /// the dominant per-button cost during a task-zone rebuild (the String→
+    /// NSString bridge and attribute-dictionary bridging drive a pile of Swift
+    /// dynamic casts on every call), and rebuilds re-measure the same titles and
+    /// font repeatedly. Titles and font size change rarely, so the hit rate is
+    /// effectively 100% during a burst of rebuilds. Access is normally on the
+    /// main thread, but `preferredWidth(...)` is a pure static helper that may be
+    /// called off-main (e.g. tests), so the cache is guarded by a lock; the
+    /// uncontended lock cost is negligible next to the measurement it avoids.
+    private struct TextWidthCacheKey: Hashable {
+        let text: String
+        let fontName: String
+        let pointSize: CGFloat
+    }
+    private static var textWidthCache: [TextWidthCacheKey: CGFloat] = [:]
+    private static let textWidthCacheLock = NSLock()
+    private static let textWidthCacheLimit = 512
+
+    static func measuredTextWidth(_ text: String, font: NSFont) -> CGFloat {
+        let key = TextWidthCacheKey(text: text, fontName: font.fontName, pointSize: font.pointSize)
+
+        textWidthCacheLock.lock()
+        if let cached = textWidthCache[key] {
+            textWidthCacheLock.unlock()
+            return cached
+        }
+        textWidthCacheLock.unlock()
+
+        let width = (text as NSString).size(withAttributes: [.font: font]).width
+
+        textWidthCacheLock.lock()
+        // Bound growth: titles vary over a long session (window titles, agent
+        // statuses), so drop the whole cache once it gets large rather than
+        // tracking per-entry age. Rebuilds immediately re-warm the live titles.
+        if textWidthCache.count >= textWidthCacheLimit {
+            textWidthCache.removeAll(keepingCapacity: true)
+        }
+        textWidthCache[key] = width
+        textWidthCacheLock.unlock()
+
+        return width
+    }
     static let dragPasteboardType = NSPasteboard.PasteboardType("com.deskbar.task")
 
     private enum WindowState {
@@ -141,7 +184,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         }
 
         let font = titleLabel.font ?? NSFont.systemFont(ofSize: settings.titleFontSize)
-        let textWidth = (friendlyName as NSString).size(withAttributes: [.font: font]).width
+        let textWidth = Self.measuredTextWidth(friendlyName, font: font)
         let extraWidth: CGFloat = showsPluginActionButton ? 106 : 76
         return min(max(maxWidth, ceil(textWidth + extraWidth)), 340)
     }
@@ -183,7 +226,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         }
 
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let textWidth = trimmedTitle.isEmpty ? 0 : (trimmedTitle as NSString).size(withAttributes: [.font: font]).width
+        let textWidth = trimmedTitle.isEmpty ? 0 : measuredTextWidth(trimmedTitle, font: font)
         let extraWidth: CGFloat = showsPluginActionButton ? 106 : 56
         let maximumWidth = isAgentWindow ? min(max(maxWidth, 240), 340) : maxWidth
         return min(max(minimumWidth, ceil(textWidth + extraWidth)), maximumWidth)
