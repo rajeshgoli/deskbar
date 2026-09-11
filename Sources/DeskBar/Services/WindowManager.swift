@@ -19,6 +19,11 @@ final class WindowManager: ObservableObject {
     private var blacklistObserver: NSObjectProtocol?
     private var cancellables = Set<AnyCancellable>()
 
+    /// How long a window keeps its place in the order after it stops being reported. Comfortably
+    /// longer than the 15s poll interval so a window missed by a whole poll cycle still recovers.
+    static let windowOrderRetentionInterval: TimeInterval = 45
+    static let maximumRetainedAbsentWindows = 128
+
     var taskbarHeight: CGFloat = 40
     var activeDisplayIDs: Set<CGDirectDisplayID> = []
 
@@ -29,6 +34,7 @@ final class WindowManager: ObservableObject {
     private var provisionalElements: [String: AXUIElement] = [:]
     private var promotionWorkItems: [String: DispatchWorkItem] = [:]
     private var windowOrder: [String] = []
+    private var windowOrderAbsentSince: [String: Date] = [:]
     private var publishedWindowState = PublishedWindowState(windows: [], boundsByWindowID: [:])
     private var trayCandidateInfosByKey: [String: TrayApplicationInfo] = [:]
     private var hasTrayCandidateInfoCache = false
@@ -145,7 +151,22 @@ final class WindowManager: ObservableObject {
         var allAXWindows: [AXUIElement] = []
 
         for application in regularApplications {
-            let axWindows = accessibilityService.enumerateWindows(for: application)
+            guard case .windows(let axWindows) = accessibilityService.windowEnumeration(
+                for: application
+            ) else {
+                // The AX call failed (busy or unresponsive app) — we do not know this app's
+                // real window list this pass. Dropping its windows here would send them to the
+                // back of the taskbar when they reappear, so carry the previous pass forward.
+                carryForwardWindows(
+                    forPID: application.processIdentifier,
+                    into: &nextAuthoritative,
+                    bounds: &nextAuthoritativeBounds,
+                    visibleProvisionalKeys: &visibleProvisionalKeys,
+                    currentWindowOrder: &currentWindowOrder,
+                    seenWindowIDs: &seenWindowIDs
+                )
+                continue
+            }
 
             for axWindow in axWindows {
                 guard
@@ -235,6 +256,27 @@ final class WindowManager: ObservableObject {
 
             return ScreenGeometry.isWindow(bounds: bounds, onDisplay: displayBounds)
         }
+    }
+
+    /// Minimized windows scoped to a display, in the taskbar's stable order. These are shown as
+    /// individual tray items rather than task buttons so they stop consuming task-zone width.
+    func minimizedWindows(on screen: NSScreen) -> [WindowInfo] {
+        minimizedWindows(onDisplay: ScreenGeometry.displayBounds(for: screen))
+    }
+
+    func minimizedWindows(onDisplay displayBounds: CGRect) -> [WindowInfo] {
+        windows(onDisplay: displayBounds).filter(Self.belongsInMinimizedTray)
+    }
+
+    /// A window earns task-zone width only if you can switch straight to it. Minimized windows go
+    /// to the tray as individual items; hidden windows (the app is Cmd-H'd) are covered by the
+    /// app-level tray icon instead, since hiding is an application-wide state.
+    static func belongsInTaskZone(_ window: WindowInfo) -> Bool {
+        !window.isMinimized && !window.isHidden
+    }
+
+    static func belongsInMinimizedTray(_ window: WindowInfo) -> Bool {
+        window.isMinimized && !window.isHidden
     }
 
     func visibleWindows(on screen: NSScreen) -> [WindowInfo] {
@@ -606,6 +648,39 @@ final class WindowManager: ObservableObject {
         return true
     }
 
+    /// Re-publishes the windows we already knew about for `pid`, used when an AX enumeration
+    /// fails and the app's true window list is unknown for this pass. Windows already recovered
+    /// from the CGWindowList snapshot are left untouched; only the ones AX alone can see
+    /// (minimized windows, windows on other Spaces) need carrying forward.
+    private func carryForwardWindows(
+        forPID pid: pid_t,
+        into nextAuthoritative: inout [CGWindowID: WindowInfo],
+        bounds nextAuthoritativeBounds: inout [CGWindowID: CGRect],
+        visibleProvisionalKeys: inout Set<String>,
+        currentWindowOrder: inout [String],
+        seenWindowIDs: inout Set<String>
+    ) {
+        for (windowID, window) in authoritative where window.pid == pid {
+            if nextAuthoritative[windowID] == nil {
+                nextAuthoritative[windowID] = window
+            }
+            if nextAuthoritativeBounds[windowID] == nil {
+                nextAuthoritativeBounds[windowID] = authoritativeBounds[windowID]
+            }
+            Self.appendWindowID(
+                nextAuthoritative[windowID]?.id ?? window.id,
+                to: &currentWindowOrder,
+                seenWindowIDs: &seenWindowIDs
+            )
+        }
+
+        for (key, window) in provisional where window.pid == pid {
+            // Keep the entry alive so the post-loop sweep does not purge it.
+            visibleProvisionalKeys.insert(key)
+            Self.appendWindowID(window.id, to: &currentWindowOrder, seenWindowIDs: &seenWindowIDs)
+        }
+    }
+
     private func removeProvisionalWindow(forKey key: String) {
         provisional.removeValue(forKey: key)
         provisionalBounds.removeValue(forKey: key)
@@ -643,7 +718,7 @@ final class WindowManager: ObservableObject {
             currentOrder: currentWindowOrder ?? combined.map(\.id)
         )
 
-        let nextWindowOrder = reconciledOrder.filter { windowsByID[$0] != nil }
+        let nextWindowOrder = retainedWindowOrder(reconciledOrder, windowsByID: windowsByID)
         let nextWindows = nextWindowOrder.compactMap { windowsByID[$0] }
         let nextPublishedWindowState = PublishedWindowState(
             windows: nextWindows,
@@ -660,6 +735,48 @@ final class WindowManager: ObservableObject {
         if didChangePublishedWindowState || forceDerivedState {
             publishDerivedState()
         }
+    }
+
+    /// Drops order placeholders for windows that have stayed gone long enough to count as closed.
+    /// A window absent for less than the grace period keeps its index, so a one-pass blip (an AX
+    /// timeout, a Space switch) restores it exactly where it was instead of at the far end.
+    private func retainedWindowOrder(
+        _ reconciledOrder: [String],
+        windowsByID: [String: WindowInfo],
+        now: Date = Date()
+    ) -> [String] {
+        var retainedOrder: [String] = []
+        var nextAbsentSince: [String: Date] = [:]
+
+        for windowID in reconciledOrder {
+            guard windowsByID[windowID] == nil else {
+                retainedOrder.append(windowID)
+                continue
+            }
+
+            let absentSince = windowOrderAbsentSince[windowID] ?? now
+            guard now.timeIntervalSince(absentSince) <= Self.windowOrderRetentionInterval else {
+                continue
+            }
+
+            nextAbsentSince[windowID] = absentSince
+            retainedOrder.append(windowID)
+        }
+
+        // Bound the placeholder set so a session that churns through many windows cannot grow it
+        // without limit; the longest-absent entries are the safest to forget first.
+        if nextAbsentSince.count > Self.maximumRetainedAbsentWindows {
+            let expiredWindowIDs = nextAbsentSince
+                .sorted { $0.value < $1.value }
+                .prefix(nextAbsentSince.count - Self.maximumRetainedAbsentWindows)
+                .map(\.key)
+            let expiredWindowIDSet = Set(expiredWindowIDs)
+            expiredWindowIDs.forEach { nextAbsentSince.removeValue(forKey: $0) }
+            retainedOrder.removeAll { expiredWindowIDSet.contains($0) }
+        }
+
+        windowOrderAbsentSince = nextAbsentSince
+        return retainedOrder
     }
 
     private func publishDerivedState() {
@@ -1086,10 +1203,17 @@ final class WindowManager: ObservableObject {
         return "pid:\(pid)"
     }
 
+    /// Keeps every window that was already ordered at its existing index and appends anything new
+    /// to the end. IDs missing from `currentOrder` are deliberately retained here — a window that
+    /// blinks out for a single refresh (an AX timeout, a Space switch) must not lose its slot.
+    /// Expiring those placeholders is `retainedWindowOrder(_:windowsByID:)`'s job.
     static func reconcileStableWindowOrder(previousOrder: [String], currentOrder: [String]) -> [String] {
-        let currentIDSet = Set(currentOrder)
-        var reconciledOrder = previousOrder.filter { currentIDSet.contains($0) }
-        var seenIDs = Set(reconciledOrder)
+        var reconciledOrder: [String] = []
+        var seenIDs = Set<String>()
+
+        for windowID in previousOrder where seenIDs.insert(windowID).inserted {
+            reconciledOrder.append(windowID)
+        }
 
         for windowID in currentOrder where seenIDs.insert(windowID).inserted {
             reconciledOrder.append(windowID)

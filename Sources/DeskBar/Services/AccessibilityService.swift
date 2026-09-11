@@ -2,6 +2,14 @@ import AppKit
 import ApplicationServices
 import Darwin
 
+/// Result of asking an application for its window list over the Accessibility API.
+enum AXWindowEnumeration {
+    /// The app answered. The payload is its eligible windows (possibly empty).
+    case windows([AXUIElement])
+    /// The AX call failed — the app's real window list is unknown for this pass.
+    case unavailable
+}
+
 final class AccessibilityService {
     typealias AXUIElementGetWindowFunc = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
     typealias GetProcessForPIDFunc = @convention(c) (pid_t, UnsafeMutablePointer<ProcessSerialNumber>) -> OSStatus
@@ -54,13 +62,37 @@ final class AccessibilityService {
     }
 
     func enumerateWindows(for application: NSRunningApplication) -> [AXUIElement] {
-        let appElement = AXUIElementCreateApplication(application.processIdentifier)
-
-        guard let windowsValue = copyAttributeValue(
-            for: appElement,
-            attribute: kAXWindowsAttribute as String
-        ) else {
+        switch windowEnumeration(for: application) {
+        case .windows(let windows):
+            return windows
+        case .unavailable:
             return []
+        }
+    }
+
+    /// Enumerates an application's windows, distinguishing "this app has no windows" from
+    /// "the AX call failed". A busy or unresponsive app answers `kAXWindowsAttribute` with
+    /// `.cannotComplete`, which is indistinguishable from an empty window list if we collapse
+    /// both to `[]` — callers that maintain window state would then drop every window the app
+    /// owns for that pass and re-add them later, losing their taskbar position.
+    func windowEnumeration(for application: NSRunningApplication) -> AXWindowEnumeration {
+        let appElement = AXUIElementCreateApplication(application.processIdentifier)
+        var windowsValue: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(
+            appElement,
+            kAXWindowsAttribute as CFString,
+            &windowsValue
+        )
+
+        switch error {
+        case .success:
+            break
+        case .attributeUnsupported, .noValue:
+            // The app genuinely exposes no window list.
+            return .windows([])
+        default:
+            // .cannotComplete (busy/unresponsive), .apiDisabled, .invalidUIElement, …
+            return .unavailable
         }
 
         let windows = (windowsValue as? [Any])?.compactMap { value -> AXUIElement? in
@@ -72,7 +104,7 @@ final class AccessibilityService {
             return unsafeBitCast(cfValue, to: AXUIElement.self)
         } ?? []
 
-        return windows.filter(isEligibleWindow)
+        return .windows(windows.filter(isEligibleWindow))
     }
 
     @discardableResult
