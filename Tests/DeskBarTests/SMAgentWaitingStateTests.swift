@@ -508,3 +508,51 @@ func smWaitingGoesStaleThenClearsWhileSMIsUnreachable() {
     #expect(expired.first?.waiting == nil)
     #expect(expired.first?.friendlyName == "1365-engineer")
 }
+
+@Test
+func smWaitingIsRefreshedOnAnnotationsRetainedThroughAPartialTerminalMapping() {
+    // An agent whose terminal mapping went missing keeps its previous
+    // annotation for up to a minute, including the wait it was built with.
+    let stalePending = try! #require(smWaitingState(for: smSession(id: "4e4cd6fa", activityState: .idle)))
+    let retained = smAnnotation(
+        sessionID: "4e4cd6fa",
+        friendlyName: "1365-engineer",
+        waiting: stalePending
+    )
+    let now = fixtureNow.addingTimeInterval(60)
+
+    let merged = SMPluginService.mergedAgentAnnotations(
+        liveSessionIDs: ["4e4cd6fa"],
+        freshAnnotations: [],
+        previousAnnotations: [retained],
+        lastObservedAtBySessionID: ["4e4cd6fa": now.addingTimeInterval(-5)],
+        now: now,
+        retainsMissingAnnotations: true
+    )
+    #expect(merged.annotations.first?.waiting == stalePending)
+
+    // Re-deriving against the same poll's obligations ages the retained wait...
+    let aged = SMPluginService.annotationsWithWaitingStates(
+        merged.annotations,
+        obligations: smObligationsSnapshot(),
+        now: now
+    )
+    #expect(aged.first?.waiting?.elapsedMinutes == 20)
+
+    // ...and drops it entirely once the results have landed, instead of showing
+    // a finished wait until the mapping recovers.
+    let completed = SMPluginService.annotationsWithWaitingStates(
+        merged.annotations,
+        obligations: smObligationsSnapshot("""
+        {
+          "schema_version": 1,
+          "sessions": [
+            {"session_id": "4e4cd6fa", "waiting_on": [], "waiting_since": null, "review_history": []}
+          ]
+        }
+        """),
+        now: now
+    )
+    #expect(completed.first?.waiting == nil)
+    #expect(completed.first?.terminalWindowID == retained.terminalWindowID)
+}

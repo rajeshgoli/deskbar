@@ -1114,9 +1114,9 @@ final class TaskButtonView: NSView, NSDraggingSource {
         // A waiting agent takes over the sm pill: the hourglass and elapsed wait
         // sit where the "sm" label normally does, and the pill still opens the
         // same menu.
-        let waitingText = showsWaitingInPluginActionButton ? waitingDecoration?.badgeText : nil
         pluginActionButton.setWaiting(
-            text: waitingText,
+            isWaiting: showsWaitingInPluginActionButton,
+            text: waitingPillText,
             frame: Self.currentWaitingFrame,
             title: pluginMenuConfiguration?.buttonTitle ?? ""
         )
@@ -1141,6 +1141,18 @@ final class TaskButtonView: NSView, NSDraggingSource {
     /// too narrow to show it).
     private var showsWaitingInPluginActionButton: Bool {
         waitingDecoration != nil && showsInlinePluginActionButton
+    }
+
+    /// Elapsed wait to draw inside the pill, or nil when a responsive cap left
+    /// room for the hourglass but not the text. Dropping the text keeps the pill
+    /// from pushing the icon and title out of a narrow button.
+    private var waitingPillText: String? {
+        guard showsWaitingInPluginActionButton, let waitingDecoration else {
+            return nil
+        }
+
+        let widthWithText = Self.minimumInlinePluginActionTaskWidth + waitingActionExtraWidth
+        return effectiveTaskWidth >= widthWithText ? waitingDecoration.badgeText : nil
     }
 
     private func updateWaitingAnimationMembership() {
@@ -1206,6 +1218,9 @@ final class TaskButtonView: NSView, NSDraggingSource {
         maxWidthConstraint?.constant = effectiveTaskWidth
         updateTaskButtonPluginActionButton()
         updateTitleVisibility()
+        // The badge trades elapsed text for the bare hourglass as the button
+        // narrows, so it has to be re-fitted whenever the width changes.
+        updateActivityBadge()
         invalidateIntrinsicContentSize()
         needsLayout = true
         superview?.needsLayout = true
@@ -1410,7 +1425,20 @@ final class TaskButtonView: NSView, NSDraggingSource {
                 return
             }
 
-            showActivityBadge(text: waiting.badgeText, showsWaitingIcon: true)
+            // The fallback badge appears exactly when the button is too narrow
+            // for the sm pill, so fit it to the space that is left: elapsed text
+            // when it fits, the hourglass alone when it does not, and nothing
+            // once even that would be clipped. The tooltip always has the full
+            // detail either way.
+            let availableWidth = availableActivityBadgeWidth
+            let font = activityLabel.font
+            if availableWidth >= Self.activityBadgeWidth(text: waiting.badgeText, font: font) {
+                showActivityBadge(text: waiting.badgeText, showsWaitingIcon: true)
+            } else if availableWidth >= Self.activityBadgeWidth(text: "", font: font) {
+                showActivityBadge(text: "", showsWaitingIcon: true)
+            } else {
+                hideActivityBadge()
+            }
             return
         }
 
@@ -1443,6 +1471,21 @@ final class TaskButtonView: NSView, NSDraggingSource {
         titleTrailingConstraint?.constant = showsWaitingIcon
             ? -(Self.activityBadgeWidth(text: text, font: activityLabel.font) + 10)
             : -10
+    }
+
+    /// Room left for the trailing badge next to the status bar and app icon,
+    /// measured against the width this button actually gets rather than the
+    /// width it asked for.
+    private var availableActivityBadgeWidth: CGFloat {
+        // 3pt leading inset, the 3pt status bar, its 5pt gap, the 24pt icon, and
+        // a 6pt gap before the badge's own 6pt trailing inset.
+        var leadingContentWidth: CGFloat = 41
+        if showsInlinePluginActionButton {
+            // The pill sits ahead of all of that, at an 8pt leading inset.
+            leadingContentWidth += 5 + pluginActionButton.preferredWidth
+        }
+
+        return effectiveTaskWidth - leadingContentWidth - 6
     }
 
     private static func activityBadgeWidth(text: String, font: NSFont?) -> CGFloat {
@@ -1644,7 +1687,7 @@ private final class TaskButtonPluginActionButton: NSButton {
     /// Width the pill needs for its current content: the square glyph pill when
     /// idle, widened by the elapsed text while waiting.
     var preferredWidth: CGFloat {
-        guard let waitingText else {
+        guard let waitingText, !waitingText.isEmpty else {
             return TaskButtonView.pluginActionButtonWidth
         }
 
@@ -1666,21 +1709,23 @@ private final class TaskButtonPluginActionButton: NSButton {
         updateLayerStyle()
     }
 
-    /// Shows the hourglass plus elapsed wait, or restores `title` when `text` is
-    /// nil. `frame` is the current step of the draining-sand animation.
-    func setWaiting(text: String?, frame: NSImage?, title: String) {
-        waitingText = text
+    /// Shows the hourglass, with the elapsed wait beside it when `text` is given
+    /// and on its own when the button is too narrow for both. `isWaiting == false`
+    /// restores the plain `title` pill. `frame` is the current step of the
+    /// draining-sand animation.
+    func setWaiting(isWaiting: Bool, text: String?, frame: NSImage?, title: String) {
+        waitingText = isWaiting ? text : nil
 
-        guard let text else {
+        guard isWaiting, let frame else {
             image = nil
             imagePosition = .noImage
-            self.title = title
+            self.title = isWaiting ? (text ?? title) : title
             return
         }
 
         image = frame
-        imagePosition = frame == nil ? .noImage : .imageLeading
-        self.title = text
+        imagePosition = text == nil ? .imageOnly : .imageLeading
+        self.title = text ?? ""
     }
 
     @available(*, unavailable)

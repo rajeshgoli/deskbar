@@ -656,7 +656,7 @@ final class SMPluginService: ObservableObject {
                         self.lastTerminalMappingRefreshAt = nil
                         self.lastMappedSessionIdentities = []
                     }
-                    self.applyAgentTabFetchSnapshot(payload.value)
+                    self.applyAgentTabFetchSnapshot(payload.value, obligations: payload.obligations)
                 case .sessions(let payload):
                     if let eventVersion = payload.tmuxClientEventVersion {
                         self.lastTmuxClientEventVersion = eventVersion
@@ -792,7 +792,10 @@ final class SMPluginService: ObservableObject {
         ))
     }
 
-    private func applyAgentTabFetchSnapshot(_ snapshot: SMAgentTabFetchSnapshot) {
+    private func applyAgentTabFetchSnapshot(
+        _ snapshot: SMAgentTabFetchSnapshot,
+        obligations: SMObligationsSnapshot?
+    ) {
         let now = Date()
         let liveSessionIDs = snapshot.liveSessionIDs
         if watchSummary != snapshot.watchSummary {
@@ -814,7 +817,15 @@ final class SMPluginService: ObservableObject {
         )
         lastObservedAgentTabAtBySessionID = mergeResult.lastObservedAtBySessionID
 
-        let mergedAnnotations = mergeResult.annotations
+        // An annotation retained through an incomplete terminal mapping carries
+        // the waiting state it was built with, which would keep showing a wait
+        // that has since aged or finished. Re-derive it from this pass's
+        // obligations so only the terminal mapping is stale.
+        let mergedAnnotations = Self.annotationsWithWaitingStates(
+            mergeResult.annotations,
+            obligations: obligations,
+            now: now
+        )
         if agentTabs != mergedAnnotations {
             agentTabs = mergedAnnotations
         }

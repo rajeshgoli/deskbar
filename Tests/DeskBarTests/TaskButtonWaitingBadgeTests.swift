@@ -74,6 +74,54 @@ struct TaskButtonWaitingBadgeTests {
     }
 
     @Test
+    func narrowButtonsDropTheElapsedTextRatherThanClipIt() {
+        let button = makeButton(waiting: makeWaitingState(elapsedMinutes: 64), showsActionButton: true)
+        let pill = try! #require(findPluginActionButton(in: button))
+        let badge = try! #require(findActivityBadge(in: button))
+
+        // Room for the pill and the elapsed text.
+        button.setWidthMode(usesAdaptiveWidth: true, widthCap: 200)
+        #expect(pill.title == "1h 4m")
+        #expect(badge.isHidden)
+
+        // Capped below that: keep the animated hourglass, drop the text rather
+        // than push the icon and title out of the button.
+        button.setWidthMode(usesAdaptiveWidth: true, widthCap: 80)
+        #expect(!pill.isHidden)
+        #expect(pill.title == "")
+        #expect(pill.image != nil)
+        #expect(badge.isHidden)
+
+        // Icon-only layout has no room for the pill at all; the tooltip keeps
+        // the detail.
+        button.setWidthMode(usesAdaptiveWidth: true, widthCap: 32)
+        #expect(pill.isHidden)
+        #expect(button.toolTip?.contains("Waiting: deskbar-tests - 1h 4m") == true)
+    }
+
+    @Test
+    func fallbackBadgeFitsItselfToTheButtonWidth() {
+        // With the sm action button turned off the badge carries the wait, so it
+        // has to fit whatever width the responsive layout leaves it.
+        let button = makeButton(waiting: makeWaitingState(elapsedMinutes: 64))
+        let badge = try! #require(findActivityBadge(in: button))
+        let label = try! #require(findBadgeLabel(in: badge))
+
+        button.setWidthMode(usesAdaptiveWidth: true, widthCap: 200)
+        #expect(!badge.isHidden)
+        #expect(label.stringValue == "1h 4m")
+
+        button.setWidthMode(usesAdaptiveWidth: true, widthCap: 70)
+        #expect(!badge.isHidden)
+        #expect(findBadgeIcon(in: badge)?.isHidden == false)
+        #expect(label.stringValue == "")
+
+        button.setWidthMode(usesAdaptiveWidth: true, widthCap: 32)
+        #expect(badge.isHidden)
+        #expect(button.toolTip?.contains("Waiting: deskbar-tests - 1h 4m") == true)
+    }
+
+    @Test
     func waitingBadgeFollowsTheActivityIndicatorSetting() {
         let settings = makeSettings()
         settings.showSessionManagerActivityIndicators = false
@@ -97,7 +145,10 @@ struct TaskButtonWaitingBadgeTests {
         #expect(titles.contains("Job deskbar-tests - running - 4m"))
     }
 
-    private func makeWaitingState(isStale: Bool = false) -> SMAgentWaitingState {
+    private func makeWaitingState(
+        isStale: Bool = false,
+        elapsedMinutes: Int = 4
+    ) -> SMAgentWaitingState {
         SMAgentWaitingState(
             items: [
                 SMWaitingItem(
@@ -105,7 +156,7 @@ struct TaskButtonWaitingBadgeTests {
                     id: "job_9",
                     label: "deskbar-tests",
                     state: "running",
-                    elapsedMinutes: 4,
+                    elapsedMinutes: elapsedMinutes,
                     requesterDisplayName: nil,
                     repo: nil,
                     prNumber: nil,
@@ -113,7 +164,7 @@ struct TaskButtonWaitingBadgeTests {
                     reviewHistory: nil
                 )
             ],
-            elapsedMinutes: 4,
+            elapsedMinutes: elapsedMinutes,
             isStale: isStale
         )
     }
