@@ -152,7 +152,8 @@ func smAgentMenuHidesTerminalOnlyActionsWithoutTerminalBacking() {
         terminalWindowID: 0,
         terminalTTY: "",
         terminalFrame: nil,
-        isSelectedTerminalTab: false
+        isSelectedTerminalTab: false,
+        waiting: nil
     )
 
     let menu = SMPluginAgentMenuFactory.makeMenu(
@@ -220,7 +221,8 @@ func smPluginMapsStudioSSHAttachTabToAnnotation() {
         lastActionSummary: nil,
         tokensUsed: nil,
         tmuxSession: "claude-studio-1",
-        tmuxSocketName: nil
+        tmuxSocketName: nil,
+        waiting: nil
     )
     let terminalTab = SMTerminalTabSnapshot(
         windowID: 7,
@@ -261,6 +263,7 @@ private func smTestAnnotation(sessionID: String) -> SMAgentWindowAnnotation {
         terminalWindowID: 42,
         terminalTTY: "/dev/ttys001",
         terminalFrame: nil,
-        isSelectedTerminalTab: true
+        isSelectedTerminalTab: true,
+        waiting: nil
     )
 }

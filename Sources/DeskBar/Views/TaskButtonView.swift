@@ -108,6 +108,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
     private let titleLabel = NSTextField(labelWithString: "")
     private let statusIndicatorView = NSView()
     private let activityBadgeView = NSVisualEffectView()
+    private let activityBadgeIconView = NSImageView()
     private let activityLabel = NSTextField(labelWithString: "")
     private let progressTrackView = NSView()
     private let progressFillView = NSView()
@@ -133,6 +134,8 @@ final class TaskButtonView: NSView, NSDraggingSource {
     private var iconSMLeadingConstraint: NSLayoutConstraint?
     private var titleLeadingConstraint: NSLayoutConstraint?
     private var titleTrailingConstraint: NSLayoutConstraint?
+    private var activityLabelDefaultLeadingConstraint: NSLayoutConstraint?
+    private var activityLabelIconLeadingConstraint: NSLayoutConstraint?
     private var progressWidthConstraint: NSLayoutConstraint?
     private var dropIndicatorLeadingConstraint: NSLayoutConstraint?
     private var dropIndicatorTrailingConstraint: NSLayoutConstraint?
@@ -483,6 +486,17 @@ final class TaskButtonView: NSView, NSDraggingSource {
         activityLabel.font = NSFont.monospacedSystemFont(ofSize: 9, weight: .semibold)
         activityLabel.textColor = .secondaryLabelColor
 
+        // Waiting agents get a glyph next to the elapsed time so the state is
+        // legible without relying on the badge or indicator color.
+        activityBadgeIconView.translatesAutoresizingMaskIntoConstraints = false
+        activityBadgeIconView.image = NSImage(
+            systemSymbolName: "hourglass",
+            accessibilityDescription: nil
+        )?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold))
+        activityBadgeIconView.contentTintColor = .secondaryLabelColor
+        activityBadgeIconView.imageScaling = .scaleProportionallyDown
+        activityBadgeIconView.isHidden = true
+
         progressTrackView.translatesAutoresizingMaskIntoConstraints = false
         progressTrackView.wantsLayer = true
         progressTrackView.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.08).cgColor
@@ -505,6 +519,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         addSubview(iconView)
         addSubview(titleLabel)
         addSubview(activityBadgeView)
+        activityBadgeView.addSubview(activityBadgeIconView)
         activityBadgeView.addSubview(activityLabel)
         addSubview(progressTrackView)
         progressTrackView.addSubview(progressFillView)
@@ -531,6 +546,17 @@ final class TaskButtonView: NSView, NSDraggingSource {
         self.dropIndicatorLeadingConstraint = dropIndicatorLeadingConstraint
         self.dropIndicatorTrailingConstraint = dropIndicatorTrailingConstraint
 
+        let activityLabelDefaultLeadingConstraint = activityLabel.leadingAnchor.constraint(
+            equalTo: activityBadgeView.leadingAnchor,
+            constant: 5
+        )
+        let activityLabelIconLeadingConstraint = activityLabel.leadingAnchor.constraint(
+            equalTo: activityBadgeIconView.trailingAnchor,
+            constant: 3
+        )
+        self.activityLabelDefaultLeadingConstraint = activityLabelDefaultLeadingConstraint
+        self.activityLabelIconLeadingConstraint = activityLabelIconLeadingConstraint
+
         NSLayoutConstraint.activate([
             maxWidthConstraint,
 
@@ -556,8 +582,13 @@ final class TaskButtonView: NSView, NSDraggingSource {
             activityBadgeView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             activityBadgeView.topAnchor.constraint(equalTo: topAnchor, constant: 4),
 
-            activityLabel.leadingAnchor.constraint(equalTo: activityBadgeView.leadingAnchor, constant: 5),
+            activityLabelDefaultLeadingConstraint,
             activityLabel.trailingAnchor.constraint(equalTo: activityBadgeView.trailingAnchor, constant: -5),
+
+            activityBadgeIconView.leadingAnchor.constraint(equalTo: activityBadgeView.leadingAnchor, constant: 5),
+            activityBadgeIconView.centerYAnchor.constraint(equalTo: activityLabel.centerYAnchor),
+            activityBadgeIconView.widthAnchor.constraint(equalToConstant: 10),
+            activityBadgeIconView.heightAnchor.constraint(equalToConstant: 10),
             activityLabel.topAnchor.constraint(equalTo: activityBadgeView.topAnchor, constant: 2),
             activityLabel.bottomAnchor.constraint(equalTo: activityBadgeView.bottomAnchor, constant: -2),
 
@@ -690,6 +721,9 @@ final class TaskButtonView: NSView, NSDraggingSource {
             } else if let lastToolName = trimmed(agentAnnotation.lastToolName) {
                 lines.append("Tool: \(lastToolName)")
             }
+            if let waiting = agentAnnotation.waiting {
+                lines.append(contentsOf: waiting.detailLines)
+            }
             if let tokensUsed = agentAnnotation.tokensUsed, tokensUsed > 0 {
                 lines.append("Tokens: \(tokensUsed)")
             }
@@ -715,6 +749,22 @@ final class TaskButtonView: NSView, NSDraggingSource {
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    /// VoiceOver reads the button as its title plus the agent state, so a
+    /// waiting agent is distinguishable from an available one without seeing the
+    /// badge. Returns nil for non-agent buttons, which keep AppKit's default.
+    private func resolvedAccessibilityLabel() -> String? {
+        guard settings.enableSessionManagerPlugin, let agentAnnotation else {
+            return nil
+        }
+
+        var label = "\(displayTitle()) - \(agentAnnotation.activityState.displayName)"
+        if let waiting = agentAnnotation.waiting {
+            label += " - \(waiting.accessibilityText)"
+        }
+
+        return label
     }
 
     private func trimmed(_ value: String?) -> String? {
@@ -943,6 +993,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         titleLabel.stringValue = displayTitle()
         titleLabel.textColor = textColor()
         toolTip = resolvedToolTip()
+        setAccessibilityLabel(resolvedAccessibilityLabel())
         iconView.image = displayIcon()
         iconView.alphaValue = iconAlpha()
         updateTaskButtonPluginActionButton()
@@ -1206,22 +1257,51 @@ final class TaskButtonView: NSView, NSDraggingSource {
     }
 
     private func updateActivityBadge() {
-        if settings.enableSessionManagerPlugin, agentAnnotation != nil {
-            activityBadgeView.isHidden = true
-            titleTrailingConstraint?.constant = -10
+        if settings.enableSessionManagerPlugin, let agentAnnotation {
+            guard
+                settings.showSessionManagerActivityIndicators,
+                let waiting = agentAnnotation.waiting
+            else {
+                hideActivityBadge()
+                return
+            }
+
+            showActivityBadge(text: waiting.badgeText, showsWaitingIcon: true)
             return
         }
 
         guard showsActivityOverlay, let activitySummary = runtimeState.activitySummary else {
-            activityBadgeView.isHidden = true
-            titleTrailingConstraint?.constant = -10
+            hideActivityBadge()
             return
         }
 
-        activityLabel.stringValue = activitySummary
-        activityLabel.textColor = .secondaryLabelColor
-        activityBadgeView.isHidden = false
+        showActivityBadge(text: activitySummary, showsWaitingIcon: false)
+    }
+
+    private func hideActivityBadge() {
+        activityBadgeView.isHidden = true
+        activityBadgeIconView.isHidden = true
         titleTrailingConstraint?.constant = -10
+    }
+
+    private func showActivityBadge(text: String, showsWaitingIcon: Bool) {
+        activityLabel.stringValue = text
+        activityLabel.textColor = .secondaryLabelColor
+        activityBadgeIconView.isHidden = !showsWaitingIcon
+        activityLabelDefaultLeadingConstraint?.isActive = !showsWaitingIcon
+        activityLabelIconLeadingConstraint?.isActive = showsWaitingIcon
+        activityBadgeView.isHidden = false
+        // The waiting badge carries live information, so keep the title clear of
+        // it. The runtime activity overlay keeps its long-standing overlap.
+        titleTrailingConstraint?.constant = showsWaitingIcon
+            ? -(Self.activityBadgeWidth(text: text, font: activityLabel.font) + 10)
+            : -10
+    }
+
+    private static func activityBadgeWidth(text: String, font: NSFont?) -> CGFloat {
+        let labelWidth = font.map { measuredTextWidth(text, font: $0) } ?? 0
+        // 5pt badge insets on both sides, the 10pt glyph, and its 3pt gap.
+        return labelWidth + 23
     }
 
     private func updateProgressIndicator() {
