@@ -105,6 +105,29 @@ struct SMAgentWindowAnnotation: Equatable {
     var isLocalTerminalBacked: Bool {
         terminalWindowID != 0 && !terminalTTY.isEmpty
     }
+
+    func with(waiting: SMAgentWaitingState?) -> SMAgentWindowAnnotation {
+        SMAgentWindowAnnotation(
+            sessionID: sessionID,
+            friendlyName: friendlyName,
+            workingDirectory: workingDirectory,
+            node: node,
+            provider: provider,
+            sessionStatus: sessionStatus,
+            activityState: activityState,
+            currentTask: currentTask,
+            agentStatusText: agentStatusText,
+            lastToolName: lastToolName,
+            lastActionSummary: lastActionSummary,
+            tokensUsed: tokensUsed,
+            tmuxSession: tmuxSession,
+            terminalWindowID: terminalWindowID,
+            terminalTTY: terminalTTY,
+            terminalFrame: terminalFrame,
+            isSelectedTerminalTab: isSelectedTerminalTab,
+            waiting: waiting
+        )
+    }
 }
 
 struct SMWatchSummary: Equatable {
@@ -288,7 +311,11 @@ private enum SMPluginRefreshResult {
     case sessionsWithoutTerminal(SMPluginRefreshPayload<[SMSessionSnapshot]>)
     case watchOnly(SMPluginRefreshPayload<[SMWatchWindowAnnotation]>)
     case clear
-    case failed
+    /// The sessions fetch failed, so the existing annotations stand. The
+    /// obligations result still rides along: the waiting decoration is re-derived
+    /// from it so it keeps ageing, goes stale, or clears while SM is unreachable
+    /// instead of freezing at whatever it last said.
+    case failed(SMObligationsSnapshot?)
 }
 
 private struct SMPluginRefreshPayload<Value> {
@@ -663,7 +690,9 @@ final class SMPluginService: ObservableObject {
                     self.watchSummary = .empty
                     self.watchWindows = []
                     self.terminalTabCountByWindowID = [:]
-                case .failed:
+                case .failed(let obligations):
+                    self.obligationsSnapshot = obligations
+                    self.applyWaitingStates(obligations: obligations, now: Date())
                     Self.writeDiagnostic("fetch failed; keeping agentTabs=\(self.agentTabs.count)")
                 }
             }
@@ -687,8 +716,7 @@ final class SMPluginService: ObservableObject {
         )
 
         guard let fetchedSessions = await sessionsTask else {
-            _ = await obligationsTask
-            return .failed
+            return .failed(await obligationsTask)
         }
         let eventState = await eventStateTask
         let eventVersion = eventState?.tmuxClientEventVersion
@@ -750,7 +778,7 @@ final class SMPluginService: ObservableObject {
         }
 
         guard let snapshot = await fetchAgentTabAnnotations(for: sessions) else {
-            return .failed
+            return .failed(obligations)
         }
 
         if eventRequiresTerminalMapping, let eventVersion {
@@ -841,6 +869,54 @@ final class SMPluginService: ObservableObject {
             annotations: sortedAnnotations(Array(mergedAnnotationsBySessionID.values)),
             lastObservedAtBySessionID: updatedLastObservedAtBySessionID
         )
+    }
+
+    /// Re-derives the waiting decoration on the annotations already on screen.
+    /// Used when the sessions fetch failed: the activity states stand, but the
+    /// waiting decoration still ages, goes stale, or clears from whatever the
+    /// obligations cache says now.
+    private func applyWaitingStates(obligations: SMObligationsSnapshot?, now: Date) {
+        let updatedAnnotations = Self.annotationsWithWaitingStates(
+            agentTabs,
+            obligations: obligations,
+            now: now
+        )
+        guard agentTabs != updatedAnnotations else {
+            return
+        }
+
+        agentTabs = updatedAnnotations
+        let selectedWindowAnnotations = Self.selectedWindowAnnotations(from: updatedAnnotations)
+        if windowAnnotations != selectedWindowAnnotations {
+            windowAnnotations = selectedWindowAnnotations
+        }
+    }
+
+    nonisolated static func annotationsWithWaitingStates(
+        _ annotations: [SMAgentWindowAnnotation],
+        obligations: SMObligationsSnapshot?,
+        now: Date
+    ) -> [SMAgentWindowAnnotation] {
+        let displayNameBySessionID = Dictionary(
+            preservingFirstValues: annotations.map { ($0.sessionID, $0.friendlyName) }
+        )
+
+        return annotations.map { annotation in
+            let waiting = SMAgentWaitingState.make(
+                sessionID: annotation.sessionID,
+                activityState: annotation.activityState,
+                obligations: obligations?.obligationsBySessionID[annotation.sessionID],
+                isStale: obligations?.isStale ?? false,
+                displayNameBySessionID: displayNameBySessionID,
+                now: now
+            )
+
+            guard waiting != annotation.waiting else {
+                return annotation
+            }
+
+            return annotation.with(waiting: waiting)
+        }
     }
 
     private func applySessionSnapshot(_ sessions: [SMSessionSnapshot]) {

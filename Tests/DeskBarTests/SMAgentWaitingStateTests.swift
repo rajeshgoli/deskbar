@@ -428,3 +428,83 @@ func smWaitingReportsTheLastReviewPollError() {
     #expect(waiting.items.first?.errorLine == "Last error: gh api rate limit exceeded")
     #expect(waiting.detailLines.contains("Last error: gh api rate limit exceeded"))
 }
+
+private func smAnnotation(
+    sessionID: String,
+    friendlyName: String,
+    activityState: SMAgentActivityState = .idle,
+    waiting: SMAgentWaitingState? = nil
+) -> SMAgentWindowAnnotation {
+    SMAgentWindowAnnotation(
+        sessionID: sessionID,
+        friendlyName: friendlyName,
+        workingDirectory: "/Users/rajesh/projects/deskbar",
+        node: "primary",
+        provider: "claude",
+        sessionStatus: "running",
+        activityState: activityState,
+        currentTask: nil,
+        agentStatusText: nil,
+        lastToolName: nil,
+        lastActionSummary: nil,
+        tokensUsed: nil,
+        tmuxSession: "claude-\(sessionID)",
+        terminalWindowID: 42,
+        terminalTTY: "/dev/ttys001",
+        terminalFrame: nil,
+        isSelectedTerminalTab: true,
+        waiting: waiting
+    )
+}
+
+@Test
+func smWaitingKeepsAgeingOnScreenWhenTheSessionsFetchFails() {
+    // A /sessions outage freezes the activity states, but the decoration is
+    // re-derived from the obligations cache so the wait keeps ageing.
+    let annotations = [smAnnotation(sessionID: "4e4cd6fa", friendlyName: "1365-engineer")]
+    let later = fixtureNow.addingTimeInterval(10 * 60)
+
+    let updated = SMPluginService.annotationsWithWaitingStates(
+        annotations,
+        obligations: smObligationsSnapshot(),
+        now: later
+    )
+
+    #expect(updated.first?.waiting?.elapsedMinutes == 29)
+    #expect(updated.first?.waiting?.isStale == false)
+    #expect(updated.first?.activityState == .idle)
+}
+
+@Test
+func smWaitingGoesStaleThenClearsWhileSMIsUnreachable() {
+    let annotations = SMPluginService.annotationsWithWaitingStates(
+        [smAnnotation(sessionID: "4e4cd6fa", friendlyName: "1365-engineer")],
+        obligations: smObligationsSnapshot(),
+        now: fixtureNow
+    )
+
+    // Both endpoints failing: the cache is marked stale and the badge says so.
+    let stale = SMPluginService.annotationsWithWaitingStates(
+        annotations,
+        obligations: SMPluginService.staleObligations(
+            cached: smObligationsSnapshot(),
+            now: fixtureNow.addingTimeInterval(30)
+        ),
+        now: fixtureNow.addingTimeInterval(30)
+    )
+    #expect(stale.first?.waiting?.isStale == true)
+    #expect(stale.first?.waiting?.badgeText.hasSuffix("?") == true)
+
+    // Past the retention window the decoration is dropped rather than left
+    // frozen on a stale wait.
+    let expired = SMPluginService.annotationsWithWaitingStates(
+        stale,
+        obligations: SMPluginService.staleObligations(
+            cached: smObligationsSnapshot(),
+            now: fixtureNow.addingTimeInterval(300)
+        ),
+        now: fixtureNow.addingTimeInterval(300)
+    )
+    #expect(expired.first?.waiting == nil)
+    #expect(expired.first?.friendlyName == "1365-engineer")
+}
