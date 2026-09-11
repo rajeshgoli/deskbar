@@ -5,6 +5,46 @@ import Testing
 @MainActor
 struct TaskButtonWaitingBadgeTests {
     @Test
+    func waitingAgentTakesOverTheSMPill() {
+        let button = makeButton(waiting: makeWaitingState(), showsActionButton: true)
+        let pill = try! #require(findPluginActionButton(in: button))
+
+        // The hourglass and elapsed wait replace the "sm" label, and the
+        // trailing badge stands down so the wait is shown once.
+        #expect(pill.title == "4m")
+        #expect(pill.image != nil)
+        #expect(findActivityBadge(in: button)?.isHidden == true)
+        #expect(button.toolTip?.contains("Waiting: deskbar-tests - 4m") == true)
+    }
+
+    @Test
+    func availableAgentKeepsThePlainSMPill() {
+        let button = makeButton(waiting: nil, showsActionButton: true)
+        let pill = try! #require(findPluginActionButton(in: button))
+
+        #expect(pill.title == "sm")
+        #expect(pill.image == nil)
+    }
+
+    @Test
+    func waitingHourglassAnimatesThroughItsSteps() {
+        let button = makeButton(waiting: makeWaitingState(), showsActionButton: true)
+        let pill = try! #require(findPluginActionButton(in: button))
+
+        let firstFrame = pill.image
+        TaskButtonView.advanceWaitingAnimation()
+        let secondFrame = pill.image
+        #expect(secondFrame !== firstFrame)
+
+        // Stepping through the cycle returns to where it started, and only the
+        // glyph changes - the elapsed text is driven by the SM poll.
+        TaskButtonView.advanceWaitingAnimation()
+        TaskButtonView.advanceWaitingAnimation()
+        #expect(pill.image === firstFrame)
+        #expect(pill.title == "4m")
+    }
+
+    @Test
     func waitingAgentGetsABadgeTooltipAndAccessibleText() {
         let button = makeButton(waiting: makeWaitingState())
 
@@ -108,11 +148,26 @@ struct TaskButtonWaitingBadgeTests {
         )
     }
 
+    private func findPluginActionButton(in view: NSView) -> NSButton? {
+        if let button = view as? NSButton, button.toolTip == "Session Manager actions" {
+            return button
+        }
+
+        for subview in view.subviews {
+            if let button = findPluginActionButton(in: subview) {
+                return button
+            }
+        }
+
+        return nil
+    }
+
     private func makeButton(
         waiting: SMAgentWaitingState?,
-        settings: TaskbarSettings? = nil
+        settings: TaskbarSettings? = nil,
+        showsActionButton: Bool = false
     ) -> TaskButtonView {
-        TaskButtonView(
+        let button = TaskButtonView(
             windowInfo: WindowInfo(
                 pid: 123,
                 cgWindowID: 456,
@@ -129,8 +184,19 @@ struct TaskButtonWaitingBadgeTests {
             agentAnnotation: makeAnnotation(waiting: waiting),
             settings: settings ?? makeSettings(),
             blacklistManager: BlacklistManager(),
+            pluginMenuConfiguration: showsActionButton
+                ? TaskButtonPluginMenuConfiguration(
+                    buttonTitle: "sm",
+                    tintColor: .secondaryLabelColor,
+                    showsActionButton: true,
+                    menuProvider: { NSMenu() }
+                )
+                : nil,
             activationHandler: { _ in }
         )
+        // The inline pill only appears once the button is wide enough for it.
+        button.setWidthMode(usesAdaptiveWidth: false, widthCap: nil)
+        return button
     }
 
     private func findActivityBadge(in view: NSView) -> NSVisualEffectView? {

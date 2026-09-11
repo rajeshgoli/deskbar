@@ -80,6 +80,87 @@ final class TaskButtonView: NSView, NSDraggingSource {
 
         return width
     }
+    static let pluginActionButtonWidth: CGFloat = 20
+
+    /// Draining-sand steps for the waiting decoration. One shared timer advances
+    /// every waiting button together, so the animation costs one low-rate
+    /// wake-up for the whole taskbar instead of one per agent, and it only runs
+    /// while something is actually waiting.
+    private static let waitingAnimationInterval: TimeInterval = 0.7
+    private static let waitingAnimationFrames: [NSImage] = [
+        "hourglass.tophalf.filled",
+        "hourglass",
+        "hourglass.bottomhalf.filled"
+    ].compactMap {
+        NSImage(systemSymbolName: $0, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold))
+    }
+    private static let waitingAnimationViews = NSHashTable<TaskButtonView>.weakObjects()
+    private static var waitingAnimationTimer: Timer?
+    private static var waitingAnimationFrameIndex = 0
+
+    private static var currentWaitingFrame: NSImage? {
+        guard !waitingAnimationFrames.isEmpty else {
+            return nil
+        }
+
+        return waitingAnimationFrames[waitingAnimationFrameIndex % waitingAnimationFrames.count]
+    }
+
+    private static func registerWaitingAnimation(for view: TaskButtonView) {
+        guard !waitingAnimationViews.contains(view) else {
+            return
+        }
+
+        waitingAnimationViews.add(view)
+        guard waitingAnimationTimer == nil else {
+            return
+        }
+
+        let timer = Timer(timeInterval: waitingAnimationInterval, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                advanceWaitingAnimation()
+            }
+        }
+        // The step is decorative, so let the system coalesce it with other work
+        // rather than waking the CPU on a strict schedule.
+        timer.tolerance = waitingAnimationInterval / 2
+        RunLoop.main.add(timer, forMode: .common)
+        waitingAnimationTimer = timer
+    }
+
+    private static func unregisterWaitingAnimation(for view: TaskButtonView) {
+        guard waitingAnimationViews.contains(view) else {
+            return
+        }
+
+        waitingAnimationViews.remove(view)
+        guard waitingAnimationViews.allObjects.isEmpty else {
+            return
+        }
+
+        waitingAnimationTimer?.invalidate()
+        waitingAnimationTimer = nil
+        waitingAnimationFrameIndex = 0
+    }
+
+    /// Advances the shared hourglass step. Exposed so tests can step the
+    /// animation without waiting on the timer.
+    static func advanceWaitingAnimation() {
+        // Weak entries for deallocated buttons can linger in the table, so drive
+        // the teardown off the live objects rather than the count.
+        let views = waitingAnimationViews.allObjects
+        guard !views.isEmpty else {
+            waitingAnimationTimer?.invalidate()
+            waitingAnimationTimer = nil
+            waitingAnimationFrameIndex = 0
+            return
+        }
+
+        waitingAnimationFrameIndex += 1
+        views.forEach { $0.applyWaitingAnimationFrame() }
+    }
+
     static let dragPasteboardType = NSPasteboard.PasteboardType("com.deskbar.task")
 
     private enum WindowState {
@@ -134,6 +215,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
     private var iconSMLeadingConstraint: NSLayoutConstraint?
     private var titleLeadingConstraint: NSLayoutConstraint?
     private var titleTrailingConstraint: NSLayoutConstraint?
+    private var pluginActionWidthConstraint: NSLayoutConstraint?
     private var activityLabelDefaultLeadingConstraint: NSLayoutConstraint?
     private var activityLabelIconLeadingConstraint: NSLayoutConstraint?
     private var progressWidthConstraint: NSLayoutConstraint?
@@ -189,7 +271,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         let font = titleLabel.font ?? NSFont.systemFont(ofSize: settings.titleFontSize)
         let textWidth = Self.measuredTextWidth(friendlyName, font: font)
         let extraWidth: CGFloat = showsPluginActionButton ? 106 : 76
-        return min(max(maxWidth, ceil(textWidth + extraWidth)), 340)
+        return min(max(maxWidth, ceil(textWidth + extraWidth + waitingActionExtraWidth)), 340)
     }
 
     private var adaptiveTaskWidth: CGFloat {
@@ -199,8 +281,20 @@ final class TaskButtonView: NSView, NSDraggingSource {
             maxWidth: maxWidth,
             showsTitles: settings.showTitles,
             showsPluginActionButton: showsPluginActionButton,
-            isAgentWindow: agentAnnotation != nil
+            isAgentWindow: agentAnnotation != nil,
+            pluginActionExtraWidth: waitingActionExtraWidth
         )
+    }
+
+    /// Extra room the sm pill needs once it carries the elapsed wait, so the
+    /// decoration widens the button instead of eating into the title.
+    private var waitingActionExtraWidth: CGFloat {
+        guard showsPluginActionButton, let waitingDecoration else {
+            return 0
+        }
+
+        let font = pluginActionButton.font ?? NSFont.monospacedSystemFont(ofSize: 9, weight: .semibold)
+        return ceil(Self.measuredTextWidth(waitingDecoration.badgeText, font: font) + 4)
     }
 
     var minimumTaskWidth: CGFloat {
@@ -221,7 +315,8 @@ final class TaskButtonView: NSView, NSDraggingSource {
         maxWidth: CGFloat,
         showsTitles: Bool,
         showsPluginActionButton: Bool,
-        isAgentWindow: Bool
+        isAgentWindow: Bool,
+        pluginActionExtraWidth: CGFloat = 0
     ) -> CGFloat {
         let minimumWidth = showsPluginActionButton ? minimumPluginActionTaskWidth : minimumTaskWidth
         guard showsTitles else {
@@ -232,7 +327,10 @@ final class TaskButtonView: NSView, NSDraggingSource {
         let textWidth = trimmedTitle.isEmpty ? 0 : measuredTextWidth(trimmedTitle, font: font)
         let extraWidth: CGFloat = showsPluginActionButton ? 106 : 56
         let maximumWidth = isAgentWindow ? min(max(maxWidth, 240), 340) : maxWidth
-        return min(max(minimumWidth, ceil(textWidth + extraWidth)), maximumWidth)
+        return min(
+            max(minimumWidth, ceil(textWidth + extraWidth + pluginActionExtraWidth)),
+            maximumWidth
+        )
     }
 
     private var effectiveTaskWidth: CGFloat {
@@ -489,10 +587,6 @@ final class TaskButtonView: NSView, NSDraggingSource {
         // Waiting agents get a glyph next to the elapsed time so the state is
         // legible without relying on the badge or indicator color.
         activityBadgeIconView.translatesAutoresizingMaskIntoConstraints = false
-        activityBadgeIconView.image = NSImage(
-            systemSymbolName: "hourglass",
-            accessibilityDescription: nil
-        )?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold))
         activityBadgeIconView.contentTintColor = .secondaryLabelColor
         activityBadgeIconView.imageScaling = .scaleProportionallyDown
         activityBadgeIconView.isHidden = true
@@ -546,6 +640,11 @@ final class TaskButtonView: NSView, NSDraggingSource {
         self.dropIndicatorLeadingConstraint = dropIndicatorLeadingConstraint
         self.dropIndicatorTrailingConstraint = dropIndicatorTrailingConstraint
 
+        let pluginActionWidthConstraint = pluginActionButton.widthAnchor.constraint(
+            equalToConstant: Self.pluginActionButtonWidth
+        )
+        self.pluginActionWidthConstraint = pluginActionWidthConstraint
+
         let activityLabelDefaultLeadingConstraint = activityLabel.leadingAnchor.constraint(
             equalTo: activityBadgeView.leadingAnchor,
             constant: 5
@@ -567,7 +666,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
 
             pluginActionButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             pluginActionButton.centerYAnchor.constraint(equalTo: centerYAnchor),
-            pluginActionButton.widthAnchor.constraint(equalToConstant: 20),
+            pluginActionWidthConstraint,
             pluginActionButton.heightAnchor.constraint(equalToConstant: 20),
 
             iconDefaultLeadingConstraint,
@@ -1012,9 +1111,57 @@ final class TaskButtonView: NSView, NSDraggingSource {
         statusSMLeadingConstraint?.isActive = shouldShowInlinePluginActionButton
         iconDefaultLeadingConstraint?.isActive = !shouldShowInlinePluginActionButton
         iconSMLeadingConstraint?.isActive = shouldShowInlinePluginActionButton
-        pluginActionButton.title = pluginMenuConfiguration?.buttonTitle ?? ""
+        // A waiting agent takes over the sm pill: the hourglass and elapsed wait
+        // sit where the "sm" label normally does, and the pill still opens the
+        // same menu.
+        let waitingText = showsWaitingInPluginActionButton ? waitingDecoration?.badgeText : nil
+        pluginActionButton.setWaiting(
+            text: waitingText,
+            frame: Self.currentWaitingFrame,
+            title: pluginMenuConfiguration?.buttonTitle ?? ""
+        )
+        pluginActionWidthConstraint?.constant = pluginActionButton.preferredWidth
         pluginActionButton.contentTintColor = pluginMenuConfiguration?.tintColor ?? .secondaryLabelColor
         pluginActionButton.activityColor = pluginMenuConfiguration?.tintColor ?? .secondaryLabelColor
+        updateWaitingAnimationMembership()
+    }
+
+    /// The waiting state to draw, or nil when the agent is not waiting or the
+    /// user has turned SM activity indicators off.
+    private var waitingDecoration: SMAgentWaitingState? {
+        guard settings.enableSessionManagerPlugin, settings.showSessionManagerActivityIndicators else {
+            return nil
+        }
+
+        return agentAnnotation?.waiting
+    }
+
+    /// Prefer the sm pill for the decoration, falling back to the trailing badge
+    /// whenever the pill is not on screen (action button turned off, or a button
+    /// too narrow to show it).
+    private var showsWaitingInPluginActionButton: Bool {
+        waitingDecoration != nil && showsInlinePluginActionButton
+    }
+
+    private func updateWaitingAnimationMembership() {
+        guard waitingDecoration != nil else {
+            Self.unregisterWaitingAnimation(for: self)
+            return
+        }
+
+        Self.registerWaitingAnimation(for: self)
+    }
+
+    /// Redraws just the hourglass step; the elapsed text and layout are driven by
+    /// the SM poll, so an animation step never re-measures the button.
+    fileprivate func applyWaitingAnimationFrame() {
+        let frame = Self.currentWaitingFrame
+        if pluginActionButton.waitingText != nil {
+            pluginActionButton.image = frame
+        }
+        if !activityBadgeIconView.isHidden {
+            activityBadgeIconView.image = frame
+        }
     }
 
     func update(
@@ -1257,11 +1404,8 @@ final class TaskButtonView: NSView, NSDraggingSource {
     }
 
     private func updateActivityBadge() {
-        if settings.enableSessionManagerPlugin, let agentAnnotation {
-            guard
-                settings.showSessionManagerActivityIndicators,
-                let waiting = agentAnnotation.waiting
-            else {
+        if settings.enableSessionManagerPlugin, agentAnnotation != nil {
+            guard let waiting = waitingDecoration, !showsWaitingInPluginActionButton else {
                 hideActivityBadge()
                 return
             }
@@ -1285,6 +1429,9 @@ final class TaskButtonView: NSView, NSDraggingSource {
     }
 
     private func showActivityBadge(text: String, showsWaitingIcon: Bool) {
+        if showsWaitingIcon {
+            activityBadgeIconView.image = Self.currentWaitingFrame
+        }
         activityLabel.stringValue = text
         activityLabel.textColor = .secondaryLabelColor
         activityBadgeIconView.isHidden = !showsWaitingIcon
@@ -1490,6 +1637,21 @@ private final class TaskButtonPluginActionButton: NSButton {
         }
     }
 
+    /// Elapsed-wait text shown in place of the plain "sm" label while the agent
+    /// is waiting on a result. nil restores the normal pill.
+    private(set) var waitingText: String?
+
+    /// Width the pill needs for its current content: the square glyph pill when
+    /// idle, widened by the elapsed text while waiting.
+    var preferredWidth: CGFloat {
+        guard let waitingText else {
+            return TaskButtonView.pluginActionButtonWidth
+        }
+
+        let textWidth = font.map { TaskButtonView.measuredTextWidth(waitingText, font: $0) } ?? 0
+        return ceil(TaskButtonView.pluginActionButtonWidth + textWidth + 4)
+    }
+
     init() {
         super.init(frame: .zero)
         title = "sm"
@@ -1497,9 +1659,28 @@ private final class TaskButtonPluginActionButton: NSButton {
         bezelStyle = .regularSquare
         font = NSFont.monospacedSystemFont(ofSize: 9, weight: .semibold)
         focusRingType = .none
+        imagePosition = .noImage
+        imageHugsTitle = true
         wantsLayer = true
         layer?.cornerRadius = 4
         updateLayerStyle()
+    }
+
+    /// Shows the hourglass plus elapsed wait, or restores `title` when `text` is
+    /// nil. `frame` is the current step of the draining-sand animation.
+    func setWaiting(text: String?, frame: NSImage?, title: String) {
+        waitingText = text
+
+        guard let text else {
+            image = nil
+            imagePosition = .noImage
+            self.title = title
+            return
+        }
+
+        image = frame
+        imagePosition = frame == nil ? .noImage : .imageLeading
+        self.title = text
     }
 
     @available(*, unavailable)
