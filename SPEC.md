@@ -144,7 +144,7 @@ backgroundColor = .clear  // vibrancy via NSVisualEffectView
 
 **Pure AppKit UI** -- SwiftUI cannot expose NSPanel's non-activating behavior. Hover tracking, middle-click, and drag-and-drop all need direct NSView control.
 
-**LaunchAgent for login item** -- SPM + ad-hoc signing means `SMAppService` won't work reliably. Write a plist to `~/Library/LaunchAgents/`.
+**LaunchAgent for login item** -- SPM plus a self-signed (non-Developer ID) certificate means `SMAppService` won't work reliably. Write a plist to `~/Library/LaunchAgents/`.
 
 ### Window Identity Model
 
@@ -593,7 +593,7 @@ Create: `LoginItemManager.swift`, `DockManager.swift`, `AppsLauncherButtonView.s
 - Apps launcher button at the left edge of the Launcher Zone
 - Multi-monitor: taskbar panel per screen, each panel scoped to its own display's windows. Display-scoped full-screen scan hides only the affected panel. See Spaces and Full-Screen Behavior.
 - App bundle packaging script
-- Ad-hoc codesign
+- Codesign with a persistent local certificate (`config/signing.env`), so the macOS Accessibility and Screen Recording grants survive a rebuild instead of being re-prompted for each install. Ad-hoc signing remains the fallback when that certificate is absent.
 
 **Milestone:** Fully packaged `.app` bundle, installable replacement for Taskbar.app.
 

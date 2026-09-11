@@ -26,7 +26,7 @@ Lightweight, native, no external dependencies. Does not modify any system settin
 - **Minimized windows stay visible** — dimmed in the taskbar (Windows-style), click to restore
 - **Settings** — configurable full-width/compact layouts, shortcuts, appearance, Dock behavior, launchers, and blacklist
 - **Dock coexistence** — three modes (independent, auto-hide, hidden) with crash-safe restore
-- **Start at login** — LaunchAgent-based, works with ad-hoc signed builds
+- **Start at login** — LaunchAgent-based, no Developer ID required
 - **Blacklist** — hide apps you don't want in the taskbar
 - **Badge dots** — best-effort notification indicators
 - **Smooth animations** — fade in/out on window appear/disappear
@@ -44,10 +44,11 @@ swift build -c release
 bash scripts/package.sh
 
 # Install
-cp -r .build/release/DeskBar.app /Applications/
+ditto .build/release/DeskBar.app /Applications/DeskBar.app
 ```
 
-Then open `/Applications/DeskBar.app`.
+Then open `/Applications/DeskBar.app`. Use `ditto` rather than `cp -r` so the
+code signature survives the copy intact.
 
 ## First Launch
 
@@ -55,10 +56,61 @@ Then open `/Applications/DeskBar.app`.
 2. **Screen Recording permission** (optional, for hover and switcher thumbnails) — System Settings > Privacy & Security > Screen Recording > add DeskBar.
 3. **Gear icon** in the menu bar — access Settings or Quit.
 
-If you rebuild and reinstall, you may need to re-grant permissions:
+Rebuilding and reinstalling does *not* cost you those grants, as long as the
+bundle is signed with a persistent certificate -- see [Code signing](#code-signing).
+If you do need to start over:
 ```bash
 tccutil reset Accessibility com.deskbar.app
+tccutil reset ScreenCapture com.deskbar.app
 ```
+
+## Code signing
+
+macOS remembers an Accessibility or Screen Recording grant by the app's
+*designated requirement*, not by its path. An ad-hoc signature (`codesign -s -`)
+has no certificate to anchor that requirement to, so every rebuild looks like a
+different app and macOS asks for permission all over again.
+
+`scripts/package.sh` therefore signs the bundle with a persistent local
+certificate, and verifies afterwards that the identifier and designated
+requirement came out exactly as configured -- a mismatch fails the package
+rather than handing you a bundle that will silently ask for approval again. The
+identity lives in `config/signing.env` as the SHA-1 fingerprint from
+`security find-identity -v -p codesigning`.
+
+On a machine without that certificate, packaging warns loudly and falls back to
+ad-hoc signing so a fresh clone still builds. Set `DESKBAR_REQUIRE_SIGNING=1` to
+make that a hard failure instead.
+
+To use your own certificate, create a self-signed code signing certificate in
+Keychain Access (*Certificate Assistant > Create a Certificate*, type *Code
+Signing*, self-signed), then point the config at it. The requirement has to be
+read back off a bundle your certificate actually signed rather than assembled by
+hand, so this is a two-step bootstrap:
+
+```bash
+# 1. Copy the 40-hex fingerprint of your certificate
+security find-identity -v -p codesigning
+
+# 2. In config/signing.env, set DESKBAR_SIGN_IDENTITY to that fingerprint and
+#    leave DESKBAR_SIGN_DESIGNATED_REQUIREMENT empty. An empty requirement
+#    skips the requirement check, which is what makes this first package
+#    possible before the expected value is known.
+
+# 3. Package, then read back the requirement your certificate produced
+swift build -c release
+bash scripts/package.sh
+codesign -d -r- .build/release/DeskBar.app   # copy the exact 'designated =>' line
+
+# 4. Paste that line into config/signing.env as
+#    DESKBAR_SIGN_DESIGNATED_REQUIREMENT, and repackage to confirm it passes
+bash scripts/package.sh
+```
+
+Leaving the requirement blank permanently is not the same thing: the check is
+the only guard that a certificate swap has not quietly changed the identity your
+existing grants are keyed to. Switching certificates does change the designated
+requirement, so the permissions have to be granted once more after a switch.
 
 ## Usage
 
