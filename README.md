@@ -84,17 +84,33 @@ make that a hard failure instead.
 
 To use your own certificate, create a self-signed code signing certificate in
 Keychain Access (*Certificate Assistant > Create a Certificate*, type *Code
-Signing*, self-signed), then point the config at it:
+Signing*, self-signed), then point the config at it. The requirement has to be
+read back off a bundle your certificate actually signed rather than assembled by
+hand, so this is a two-step bootstrap:
 
 ```bash
-security find-identity -v -p codesigning   # copy the 40-hex fingerprint
-codesign --force --sign <FINGERPRINT> --identifier com.deskbar.app /tmp/Probe.app
-codesign -d -r- /tmp/Probe.app             # copy the exact 'designated =>' line
+# 1. Copy the 40-hex fingerprint of your certificate
+security find-identity -v -p codesigning
+
+# 2. In config/signing.env, set DESKBAR_SIGN_IDENTITY to that fingerprint and
+#    leave DESKBAR_SIGN_DESIGNATED_REQUIREMENT empty. An empty requirement
+#    skips the requirement check, which is what makes this first package
+#    possible before the expected value is known.
+
+# 3. Package, then read back the requirement your certificate produced
+swift build -c release
+bash scripts/package.sh
+codesign -d -r- .build/release/DeskBar.app   # copy the exact 'designated =>' line
+
+# 4. Paste that line into config/signing.env as
+#    DESKBAR_SIGN_DESIGNATED_REQUIREMENT, and repackage to confirm it passes
+bash scripts/package.sh
 ```
 
-Put both values in `config/signing.env`. Switching certificates changes the
-designated requirement, so the existing permission grants have to be given once
-more after the switch.
+Leaving the requirement blank permanently is not the same thing: the check is
+the only guard that a certificate swap has not quietly changed the identity your
+existing grants are keyed to. Switching certificates does change the designated
+requirement, so the permissions have to be granted once more after a switch.
 
 ## Usage
 
