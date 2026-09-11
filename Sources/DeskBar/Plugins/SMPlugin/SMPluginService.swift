@@ -98,9 +98,35 @@ struct SMAgentWindowAnnotation: Equatable {
     let terminalTTY: String
     let terminalFrame: CGRect?
     let isSelectedTerminalTab: Bool
+    /// Pending results this agent owes the user, or nil when it is not an idle
+    /// agent with tracked obligations. Independent of `activityState`.
+    let waiting: SMAgentWaitingState?
 
     var isLocalTerminalBacked: Bool {
         terminalWindowID != 0 && !terminalTTY.isEmpty
+    }
+
+    func with(waiting: SMAgentWaitingState?) -> SMAgentWindowAnnotation {
+        SMAgentWindowAnnotation(
+            sessionID: sessionID,
+            friendlyName: friendlyName,
+            workingDirectory: workingDirectory,
+            node: node,
+            provider: provider,
+            sessionStatus: sessionStatus,
+            activityState: activityState,
+            currentTask: currentTask,
+            agentStatusText: agentStatusText,
+            lastToolName: lastToolName,
+            lastActionSummary: lastActionSummary,
+            tokensUsed: tokensUsed,
+            tmuxSession: tmuxSession,
+            terminalWindowID: terminalWindowID,
+            terminalTTY: terminalTTY,
+            terminalFrame: terminalFrame,
+            isSelectedTerminalTab: isSelectedTerminalTab,
+            waiting: waiting
+        )
     }
 }
 
@@ -234,6 +260,7 @@ struct SMSessionSnapshot: Equatable {
     let tokensUsed: Int?
     let tmuxSession: String
     let tmuxSocketName: String?
+    let waiting: SMAgentWaitingState?
 
     var displayName: String {
         let trimmedName = friendlyName?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -284,12 +311,19 @@ private enum SMPluginRefreshResult {
     case sessionsWithoutTerminal(SMPluginRefreshPayload<[SMSessionSnapshot]>)
     case watchOnly(SMPluginRefreshPayload<[SMWatchWindowAnnotation]>)
     case clear
-    case failed
+    /// The sessions fetch failed, so the existing annotations stand. The
+    /// obligations result still rides along: the waiting decoration is re-derived
+    /// from it so it keeps ageing, goes stale, or clears while SM is unreachable
+    /// instead of freezing at whatever it last said.
+    case failed(SMObligationsSnapshot?)
 }
 
 private struct SMPluginRefreshPayload<Value> {
     let value: Value
     let tmuxClientEventVersion: Int?
+    /// Obligations backing this pass, so the service can cache them for the
+    /// polls that reuse the snapshot instead of refetching it.
+    let obligations: SMObligationsSnapshot?
 }
 
 struct SMAgentAnnotationMergeResult {
@@ -327,6 +361,9 @@ enum SMPluginAgentMenuFactory {
 
         menu.addItem(metadataItem(annotation.friendlyName))
         menu.addItem(metadataItem("\(annotation.activityState.displayName) - \(annotation.provider) - \(annotation.sessionStatus)"))
+        if let waiting = annotation.waiting {
+            waiting.detailLines.forEach { menu.addItem(metadataItem($0)) }
+        }
         if let node = trimmed(annotation.node), node != "primary" {
             menu.addItem(metadataItem("Node: \(node)"))
         }
@@ -402,6 +439,15 @@ final class SMPluginService: ObservableObject {
     private nonisolated static let commandTimeout: TimeInterval = 2.0
     private nonisolated static let refreshStaleTimeout: TimeInterval = 20.0
     private nonisolated static let terminalMappingRefreshInterval: TimeInterval = 30.0
+    /// `/session-obligations` returns every session's tracked review history, so
+    /// it is a much larger payload than `/sessions`. Waiting decoration only has
+    /// to keep up with job and review completions, so refetch it on its own
+    /// slower cadence and reuse the cached snapshot on the polls in between.
+    private nonisolated static let obligationsRefreshInterval: TimeInterval = 4.0
+    /// How long a cached obligations snapshot keeps decorating agents while the
+    /// endpoint is failing. Past this the decoration is dropped rather than left
+    /// indefinitely stale; the normal session display is untouched either way.
+    private nonisolated static let obligationsStaleRetention: TimeInterval = 120.0
     private nonisolated static let retireTimeout: TimeInterval = 30.0
     private nonisolated static let staleAnnotationRetention: TimeInterval = 60.0
     private nonisolated static let diagnosticLogURL = URL(fileURLWithPath: "/tmp/deskbar-sm-plugin.log")
@@ -428,6 +474,7 @@ final class SMPluginService: ObservableObject {
     private var lastMappedSessionIdentities: Set<SMSessionMappingIdentity> = []
     private var lastTmuxClientEventVersion: Int?
     private var lastObservedAgentTabAtBySessionID: [String: Date] = [:]
+    private var obligationsSnapshot: SMObligationsSnapshot?
     private var renamePopover: NSPopover?
 
     init(pollInterval: TimeInterval = 2.0, isEnabled: Bool = true) {
@@ -471,6 +518,7 @@ final class SMPluginService: ObservableObject {
             lastTerminalMappingRefreshAt = nil
             lastMappedSessionIdentities = []
             lastTmuxClientEventVersion = nil
+            obligationsSnapshot = nil
             windowAnnotations = [:]
             agentTabs = []
             watchSummary = .empty
@@ -564,11 +612,17 @@ final class SMPluginService: ObservableObject {
         let intervalRequiresTerminalMapping = lastTerminalMappingRefreshAt
             .map { now.timeIntervalSince($0) >= Self.terminalMappingRefreshInterval } ?? true
         let shouldRefreshTerminalMapping = forceTerminalMapping || intervalRequiresTerminalMapping
+        let cachedObligations = obligationsSnapshot
+        let shouldFetchObligations = cachedObligations
+            .map { now.timeIntervalSince($0.fetchedAt) >= Self.obligationsRefreshInterval } ?? true
         refreshTask = Task { [weak self] in
             let result = await Self.fetchRefreshResult(
                 lastMappedSessionIdentities: mappedSessionIdentities,
                 lastTmuxClientEventVersion: tmuxClientEventVersion,
-                shouldRefreshTerminalMapping: shouldRefreshTerminalMapping
+                shouldRefreshTerminalMapping: shouldRefreshTerminalMapping,
+                cachedObligations: cachedObligations,
+                shouldFetchObligations: shouldFetchObligations,
+                now: now
             )
 
             await MainActor.run {
@@ -594,6 +648,7 @@ final class SMPluginService: ObservableObject {
                     if let eventVersion = payload.tmuxClientEventVersion {
                         self.lastTmuxClientEventVersion = eventVersion
                     }
+                    self.obligationsSnapshot = payload.obligations
                     if payload.value.completedTerminalMapping {
                         self.lastTerminalMappingRefreshAt = Date()
                         self.lastMappedSessionIdentities = payload.value.sessionMappingIdentities
@@ -601,16 +656,18 @@ final class SMPluginService: ObservableObject {
                         self.lastTerminalMappingRefreshAt = nil
                         self.lastMappedSessionIdentities = []
                     }
-                    self.applyAgentTabFetchSnapshot(payload.value)
+                    self.applyAgentTabFetchSnapshot(payload.value, obligations: payload.obligations)
                 case .sessions(let payload):
                     if let eventVersion = payload.tmuxClientEventVersion {
                         self.lastTmuxClientEventVersion = eventVersion
                     }
+                    self.obligationsSnapshot = payload.obligations
                     self.applySessionSnapshot(payload.value)
                 case .sessionsWithoutTerminal(let payload):
                     if let eventVersion = payload.tmuxClientEventVersion {
                         self.lastTmuxClientEventVersion = eventVersion
                     }
+                    self.obligationsSnapshot = payload.obligations
                     self.lastTerminalMappingRefreshAt = nil
                     self.lastMappedSessionIdentities = []
                     self.applyTerminalUnavailableSessionSnapshot(payload.value)
@@ -618,6 +675,7 @@ final class SMPluginService: ObservableObject {
                     if let eventVersion = payload.tmuxClientEventVersion {
                         self.lastTmuxClientEventVersion = eventVersion
                     }
+                    self.obligationsSnapshot = payload.obligations
                     self.lastTerminalMappingRefreshAt = nil
                     self.lastMappedSessionIdentities = []
                     self.applyWatchOnlySnapshot(payload.value)
@@ -625,13 +683,16 @@ final class SMPluginService: ObservableObject {
                     self.lastTerminalMappingRefreshAt = nil
                     self.lastMappedSessionIdentities = []
                     self.lastTmuxClientEventVersion = nil
+                    self.obligationsSnapshot = nil
                     self.lastObservedAgentTabAtBySessionID = [:]
                     self.windowAnnotations = [:]
                     self.agentTabs = []
                     self.watchSummary = .empty
                     self.watchWindows = []
                     self.terminalTabCountByWindowID = [:]
-                case .failed:
+                case .failed(let obligations):
+                    self.obligationsSnapshot = obligations
+                    self.applyWaitingStates(obligations: obligations, now: Date())
                     Self.writeDiagnostic("fetch failed; keeping agentTabs=\(self.agentTabs.count)")
                 }
             }
@@ -641,16 +702,30 @@ final class SMPluginService: ObservableObject {
     private nonisolated static func fetchRefreshResult(
         lastMappedSessionIdentities: Set<SMSessionMappingIdentity>,
         lastTmuxClientEventVersion: Int?,
-        shouldRefreshTerminalMapping: Bool
+        shouldRefreshTerminalMapping: Bool,
+        cachedObligations: SMObligationsSnapshot?,
+        shouldFetchObligations: Bool,
+        now: Date
     ) async -> SMPluginRefreshResult {
         async let sessionsTask = fetchSessions()
         async let eventStateTask = fetchEventState()
+        async let obligationsTask = resolvedObligations(
+            shouldFetch: shouldFetchObligations,
+            cached: cachedObligations,
+            now: now
+        )
 
-        guard let sessions = await sessionsTask else {
-            return .failed
+        guard let fetchedSessions = await sessionsTask else {
+            return .failed(await obligationsTask)
         }
         let eventState = await eventStateTask
         let eventVersion = eventState?.tmuxClientEventVersion
+        let obligations = await obligationsTask
+        let sessions = sessionsWithWaitingStates(
+            fetchedSessions,
+            obligations: obligations,
+            now: now
+        )
 
         guard !sessions.isEmpty else {
             let terminalIsRunning = await MainActor.run {
@@ -667,7 +742,8 @@ final class SMPluginService: ObservableObject {
 
             return .watchOnly(SMPluginRefreshPayload(
                 value: watchWindows,
-                tmuxClientEventVersion: eventVersion
+                tmuxClientEventVersion: eventVersion,
+                obligations: obligations
             ))
         }
 
@@ -685,7 +761,8 @@ final class SMPluginService: ObservableObject {
         guard needsTerminalMapping else {
             return .sessions(SMPluginRefreshPayload(
                 value: sessions,
-                tmuxClientEventVersion: eventVersion
+                tmuxClientEventVersion: eventVersion,
+                obligations: obligations
             ))
         }
 
@@ -695,12 +772,13 @@ final class SMPluginService: ObservableObject {
         guard terminalIsRunning else {
             return .sessionsWithoutTerminal(SMPluginRefreshPayload(
                 value: sessions,
-                tmuxClientEventVersion: eventVersion
+                tmuxClientEventVersion: eventVersion,
+                obligations: obligations
             ))
         }
 
         guard let snapshot = await fetchAgentTabAnnotations(for: sessions) else {
-            return .failed
+            return .failed(obligations)
         }
 
         if eventRequiresTerminalMapping, let eventVersion {
@@ -709,11 +787,15 @@ final class SMPluginService: ObservableObject {
 
         return .mapped(SMPluginRefreshPayload(
             value: snapshot,
-            tmuxClientEventVersion: eventVersion
+            tmuxClientEventVersion: eventVersion,
+            obligations: obligations
         ))
     }
 
-    private func applyAgentTabFetchSnapshot(_ snapshot: SMAgentTabFetchSnapshot) {
+    private func applyAgentTabFetchSnapshot(
+        _ snapshot: SMAgentTabFetchSnapshot,
+        obligations: SMObligationsSnapshot?
+    ) {
         let now = Date()
         let liveSessionIDs = snapshot.liveSessionIDs
         if watchSummary != snapshot.watchSummary {
@@ -735,7 +817,15 @@ final class SMPluginService: ObservableObject {
         )
         lastObservedAgentTabAtBySessionID = mergeResult.lastObservedAtBySessionID
 
-        let mergedAnnotations = mergeResult.annotations
+        // An annotation retained through an incomplete terminal mapping carries
+        // the waiting state it was built with, which would keep showing a wait
+        // that has since aged or finished. Re-derive it from this pass's
+        // obligations so only the terminal mapping is stale.
+        let mergedAnnotations = Self.annotationsWithWaitingStates(
+            mergeResult.annotations,
+            obligations: obligations,
+            now: now
+        )
         if agentTabs != mergedAnnotations {
             agentTabs = mergedAnnotations
         }
@@ -790,6 +880,54 @@ final class SMPluginService: ObservableObject {
             annotations: sortedAnnotations(Array(mergedAnnotationsBySessionID.values)),
             lastObservedAtBySessionID: updatedLastObservedAtBySessionID
         )
+    }
+
+    /// Re-derives the waiting decoration on the annotations already on screen.
+    /// Used when the sessions fetch failed: the activity states stand, but the
+    /// waiting decoration still ages, goes stale, or clears from whatever the
+    /// obligations cache says now.
+    private func applyWaitingStates(obligations: SMObligationsSnapshot?, now: Date) {
+        let updatedAnnotations = Self.annotationsWithWaitingStates(
+            agentTabs,
+            obligations: obligations,
+            now: now
+        )
+        guard agentTabs != updatedAnnotations else {
+            return
+        }
+
+        agentTabs = updatedAnnotations
+        let selectedWindowAnnotations = Self.selectedWindowAnnotations(from: updatedAnnotations)
+        if windowAnnotations != selectedWindowAnnotations {
+            windowAnnotations = selectedWindowAnnotations
+        }
+    }
+
+    nonisolated static func annotationsWithWaitingStates(
+        _ annotations: [SMAgentWindowAnnotation],
+        obligations: SMObligationsSnapshot?,
+        now: Date
+    ) -> [SMAgentWindowAnnotation] {
+        let displayNameBySessionID = Dictionary(
+            preservingFirstValues: annotations.map { ($0.sessionID, $0.friendlyName) }
+        )
+
+        return annotations.map { annotation in
+            let waiting = SMAgentWaitingState.make(
+                sessionID: annotation.sessionID,
+                activityState: annotation.activityState,
+                obligations: obligations?.obligationsBySessionID[annotation.sessionID],
+                isStale: obligations?.isStale ?? false,
+                displayNameBySessionID: displayNameBySessionID,
+                now: now
+            )
+
+            guard waiting != annotation.waiting else {
+                return annotation
+            }
+
+            return annotation.with(waiting: waiting)
+        }
     }
 
     private func applySessionSnapshot(_ sessions: [SMSessionSnapshot]) {
@@ -1068,7 +1206,8 @@ final class SMPluginService: ObservableObject {
                 terminalWindowID: terminalTab.windowID,
                 terminalTTY: terminalTab.tty,
                 terminalFrame: terminalTab.frame,
-                isSelectedTerminalTab: terminalTab.isSelected
+                isSelectedTerminalTab: terminalTab.isSelected,
+                waiting: session.waiting
             )
 
             if annotationsBySessionID[session.id]?.isSelectedTerminalTab != true {
@@ -1099,7 +1238,8 @@ final class SMPluginService: ObservableObject {
             terminalWindowID: annotation.terminalWindowID,
             terminalTTY: annotation.terminalTTY,
             terminalFrame: annotation.terminalFrame,
-            isSelectedTerminalTab: annotation.isSelectedTerminalTab
+            isSelectedTerminalTab: annotation.isSelectedTerminalTab,
+            waiting: session.waiting
         )
     }
 
@@ -1338,11 +1478,126 @@ final class SMPluginService: ObservableObject {
                     lastActionSummary: session.lastActionSummary,
                     tokensUsed: session.tokensUsed,
                     tmuxSession: session.tmuxSession,
-                    tmuxSocketName: session.tmuxSocketName
+                    tmuxSocketName: session.tmuxSocketName,
+                    waiting: nil
                 )
             }
         } catch {
             return nil
+        }
+    }
+
+    /// Returns the obligations backing this poll: a fresh fetch when the cache
+    /// is due, the untouched cache when it is not, and the cache marked stale
+    /// when the fetch fails. A failure (including a 404 from a server without
+    /// the endpoint) never clears the sessions themselves - it only ages out the
+    /// waiting decoration once the cache passes `obligationsStaleRetention`.
+    private nonisolated static func resolvedObligations(
+        shouldFetch: Bool,
+        cached: SMObligationsSnapshot?,
+        now: Date
+    ) async -> SMObligationsSnapshot? {
+        guard shouldFetch else {
+            return cached
+        }
+
+        if let obligationsBySessionID = await fetchSessionObligations() {
+            return SMObligationsSnapshot(
+                obligationsBySessionID: obligationsBySessionID,
+                fetchedAt: now,
+                isStale: false
+            )
+        }
+
+        guard let staleSnapshot = staleObligations(cached: cached, now: now) else {
+            return nil
+        }
+
+        writeDiagnostic("session obligations fetch failed; reusing cached snapshot as stale")
+        return staleSnapshot
+    }
+
+    /// Cached obligations to keep showing after a failed fetch, marked stale, or
+    /// nil once the cache is older than `obligationsStaleRetention`.
+    nonisolated static func staleObligations(
+        cached: SMObligationsSnapshot?,
+        now: Date
+    ) -> SMObligationsSnapshot? {
+        guard let cached, now.timeIntervalSince(cached.fetchedAt) <= obligationsStaleRetention else {
+            return nil
+        }
+
+        return cached.markedStale()
+    }
+
+    private nonisolated static func fetchSessionObligations() async -> [String: SMSessionObligations]? {
+        guard let obligationsURL = SMClientConfiguration.apiURL(path: "/session-obligations") else {
+            return nil
+        }
+
+        var request = URLRequest(url: obligationsURL)
+        request.timeoutInterval = 0.75
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse,
+               !(200...299).contains(httpResponse.statusCode) {
+                return nil
+            }
+
+            return SMSessionObligationsParser.parse(data)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Joins obligations onto the live sessions. Only idle agents with pending
+    /// results are decorated; `activityState` itself is never rewritten, and a
+    /// session missing from a successful snapshot simply has nothing tracked.
+    nonisolated static func sessionsWithWaitingStates(
+        _ sessions: [SMSessionSnapshot],
+        obligations: SMObligationsSnapshot?,
+        now: Date
+    ) -> [SMSessionSnapshot] {
+        guard let obligations else {
+            return sessions
+        }
+
+        let displayNameBySessionID = Dictionary(
+            preservingFirstValues: sessions.map { ($0.id, $0.displayName) }
+        )
+
+        return sessions.map { session in
+            let waiting = SMAgentWaitingState.make(
+                sessionID: session.id,
+                activityState: session.activityState,
+                obligations: obligations.obligationsBySessionID[session.id],
+                isStale: obligations.isStale,
+                displayNameBySessionID: displayNameBySessionID,
+                now: now
+            )
+
+            guard waiting != session.waiting else {
+                return session
+            }
+
+            return SMSessionSnapshot(
+                id: session.id,
+                friendlyName: session.friendlyName,
+                workingDirectory: session.workingDirectory,
+                node: session.node,
+                provider: session.provider,
+                status: session.status,
+                activityState: session.activityState,
+                currentTask: session.currentTask,
+                agentStatusText: session.agentStatusText,
+                lastToolName: session.lastToolName,
+                lastActionSummary: session.lastActionSummary,
+                tokensUsed: session.tokensUsed,
+                tmuxSession: session.tmuxSession,
+                tmuxSocketName: session.tmuxSocketName,
+                waiting: waiting
+            )
         }
     }
 

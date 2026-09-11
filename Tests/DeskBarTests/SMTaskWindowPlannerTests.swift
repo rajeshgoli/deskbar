@@ -189,6 +189,7 @@ private func agentAnnotation(
         terminalWindowID: terminalWindowID,
         terminalTTY: "/dev/ttys001",
         terminalFrame: terminalFrame,
-        isSelectedTerminalTab: true
+        isSelectedTerminalTab: true,
+        waiting: nil
     )
 }

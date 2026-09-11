@@ -195,7 +195,8 @@ struct TaskButtonWidthTests {
             terminalWindowID: 42,
             terminalTTY: "/dev/ttys001",
             terminalFrame: nil,
-            isSelectedTerminalTab: true
+            isSelectedTerminalTab: true,
+            waiting: nil
         )
     }
 }
