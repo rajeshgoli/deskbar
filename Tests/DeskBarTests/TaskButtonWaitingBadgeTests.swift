@@ -45,6 +45,22 @@ struct TaskButtonWaitingBadgeTests {
     }
 
     @Test
+    func compactWaitingPillKeepsAnimating() {
+        let button = makeButton(waiting: makeWaitingState(elapsedMinutes: 64), showsActionButton: true)
+        let pill = try! #require(findPluginActionButton(in: button))
+
+        // Narrow enough that the pill shows the hourglass alone - which is then
+        // the only visible waiting cue, so it has to keep animating.
+        button.setWidthMode(usesAdaptiveWidth: true, widthCap: 80)
+        #expect(pill.title == "")
+
+        let firstFrame = pill.image
+        TaskButtonView.advanceWaitingAnimation()
+        #expect(pill.image !== firstFrame)
+        #expect(pill.title == "")
+    }
+
+    @Test
     func waitingAgentGetsABadgeTooltipAndAccessibleText() {
         let button = makeButton(waiting: makeWaitingState())
 

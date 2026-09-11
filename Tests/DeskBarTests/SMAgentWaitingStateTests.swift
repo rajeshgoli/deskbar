@@ -556,3 +556,48 @@ func smWaitingIsRefreshedOnAnnotationsRetainedThroughAPartialTerminalMapping() {
     #expect(completed.first?.waiting == nil)
     #expect(completed.first?.terminalWindowID == retained.terminalWindowID)
 }
+
+@Test
+func smWaitingElapsedIgnoresObligationsItCannotShow() {
+    // A newer server reports an unsupported kind that is older than everything
+    // this build can display. The dropped item must not stretch the elapsed
+    // wait shown for the results that are listed.
+    let waiting = try! #require(smWaitingState(
+        for: smSession(id: "solo", activityState: .idle),
+        snapshot: smObligationsSnapshot("""
+        {
+          "schema_version": 1,
+          "sessions": [
+            {
+              "session_id": "solo",
+              "waiting_on": [
+                {
+                  "kind": "future_kind", "id": "x_1", "label": "unknown",
+                  "state": "pending", "since": "2026-09-08T17:00:00Z",
+                  "requester_session_id": "solo"
+                },
+                {
+                  "kind": "queue_job", "id": "job_9", "label": "deskbar-tests",
+                  "state": "running", "since": "2026-09-11T17:55:33Z",
+                  "requester_session_id": "solo"
+                }
+              ],
+              "waiting_since": "2026-09-08T17:00:00Z"
+            }
+          ]
+        }
+        """)
+    ))
+
+    #expect(waiting.items.count == 1)
+    #expect(waiting.badgeText == "2m")
+    #expect(waiting.summaryLine == "Waiting: deskbar-tests - 2m")
+}
+
+@Test
+func smWaitingUsesTheServerWaitingSinceWhenNothingWasDropped() {
+    let waiting = try! #require(smWaitingState(for: smSession(id: "4e4cd6fa", activityState: .idle)))
+
+    #expect(waiting.items.count == 3)
+    #expect(waiting.elapsedMinutes == 19)
+}

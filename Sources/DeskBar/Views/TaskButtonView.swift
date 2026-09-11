@@ -1168,7 +1168,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
     /// the SM poll, so an animation step never re-measures the button.
     fileprivate func applyWaitingAnimationFrame() {
         let frame = Self.currentWaitingFrame
-        if pluginActionButton.waitingText != nil {
+        if pluginActionButton.isWaiting {
             pluginActionButton.image = frame
         }
         if !activityBadgeIconView.isHidden {
@@ -1681,8 +1681,13 @@ private final class TaskButtonPluginActionButton: NSButton {
     }
 
     /// Elapsed-wait text shown in place of the plain "sm" label while the agent
-    /// is waiting on a result. nil restores the normal pill.
+    /// is waiting on a result. nil while the pill shows the hourglass alone.
     private(set) var waitingText: String?
+
+    /// Whether the pill is currently the waiting decoration. Tracked separately
+    /// from `waitingText`, which is nil in the narrow icon-only pill that still
+    /// has an hourglass to animate.
+    private(set) var isWaiting = false
 
     /// Width the pill needs for its current content: the square glyph pill when
     /// idle, widened by the elapsed text while waiting.
@@ -1714,6 +1719,7 @@ private final class TaskButtonPluginActionButton: NSButton {
     /// restores the plain `title` pill. `frame` is the current step of the
     /// draining-sand animation.
     func setWaiting(isWaiting: Bool, text: String?, frame: NSImage?, title: String) {
+        self.isWaiting = isWaiting
         waitingText = isWaiting ? text : nil
 
         guard isWaiting, let frame else {

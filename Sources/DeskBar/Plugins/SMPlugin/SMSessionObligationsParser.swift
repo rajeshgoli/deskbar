@@ -67,10 +67,20 @@ enum SMSessionObligationsParser {
                 )
             }
 
+            // The server computes `waiting_since` over every obligation it
+            // tracks, including kinds this build does not know how to show.
+            // Falling back to the retained items keeps the elapsed wait tied to
+            // what is actually listed, rather than reporting days against a
+            // result the user cannot see.
+            let droppedUnsupportedItems = items.count != (session.waitingOn ?? []).count
+            let waitingSince = droppedUnsupportedItems
+                ? items.compactMap(\.since).min()
+                : parseDate(session.waitingSince)
+
             return (sessionID, SMSessionObligations(
                 sessionID: sessionID,
                 items: items,
-                waitingSince: parseDate(session.waitingSince),
+                waitingSince: waitingSince,
                 reviewHistory: reviewHistory
             ))
         }
