@@ -23,6 +23,11 @@ final class WindowManager: ObservableObject {
     /// longer than the 15s poll interval so a window missed by a whole poll cycle still recovers.
     static let windowOrderRetentionInterval: TimeInterval = 45
     static let maximumRetainedAbsentWindows = 128
+    /// How long an app that keeps failing AX enumeration has its previous windows carried
+    /// forward. Past this it is treated as having none, so an app wedged indefinitely cannot
+    /// pin phantom task buttons. Matched to the order retention window: beyond it the order
+    /// placeholders expire anyway, so carrying further buys nothing.
+    static let axEnumerationCarryForwardInterval: TimeInterval = 45
 
     var taskbarHeight: CGFloat = 40
     var activeDisplayIDs: Set<CGDirectDisplayID> = []
@@ -35,6 +40,7 @@ final class WindowManager: ObservableObject {
     private var promotionWorkItems: [String: DispatchWorkItem] = [:]
     private var windowOrder: [String] = []
     private var windowOrderAbsentSince: [String: Date] = [:]
+    private var axEnumerationFailingSince: [pid_t: Date] = [:]
     private var publishedWindowState = PublishedWindowState(windows: [], boundsByWindowID: [:])
     private var trayCandidateInfosByKey: [String: TrayApplicationInfo] = [:]
     private var hasTrayCandidateInfoCache = false
@@ -150,21 +156,31 @@ final class WindowManager: ObservableObject {
         var visibleProvisionalKeys = Set<String>()
         var allAXWindows: [AXUIElement] = []
 
+        let refreshedAt = Date()
+        var nextAXEnumerationFailingSince: [pid_t: Date] = [:]
+
         for application in regularApplications {
+            let pid = application.processIdentifier
             guard case .windows(let axWindows) = accessibilityService.windowEnumeration(
                 for: application
             ) else {
-                // The AX call failed (busy or unresponsive app) — we do not know this app's
+                // A transient AX failure (busy or unresponsive app) — we do not know this app's
                 // real window list this pass. Dropping its windows here would send them to the
-                // back of the taskbar when they reappear, so carry the previous pass forward.
-                carryForwardWindows(
-                    forPID: application.processIdentifier,
-                    into: &nextAuthoritative,
-                    bounds: &nextAuthoritativeBounds,
-                    visibleProvisionalKeys: &visibleProvisionalKeys,
-                    currentWindowOrder: &currentWindowOrder,
-                    seenWindowIDs: &seenWindowIDs
-                )
+                // back of the taskbar when they reappear, so carry the previous pass forward,
+                // but only while the app is plausibly still coming back.
+                let failingSince = axEnumerationFailingSince[pid] ?? refreshedAt
+                nextAXEnumerationFailingSince[pid] = failingSince
+
+                if refreshedAt.timeIntervalSince(failingSince) <= Self.axEnumerationCarryForwardInterval {
+                    carryForwardWindows(
+                        forPID: pid,
+                        into: &nextAuthoritative,
+                        bounds: &nextAuthoritativeBounds,
+                        visibleProvisionalKeys: &visibleProvisionalKeys,
+                        currentWindowOrder: &currentWindowOrder,
+                        seenWindowIDs: &seenWindowIDs
+                    )
+                }
                 continue
             }
 
@@ -227,6 +243,7 @@ final class WindowManager: ObservableObject {
 
         authoritative = nextAuthoritative
         authoritativeBounds = nextAuthoritativeBounds
+        axEnumerationFailingSince = nextAXEnumerationFailingSince
         publishWindows(currentWindowOrder: currentWindowOrder, forceDerivedState: forceDerivedState)
 
         for axWindow in allAXWindows {

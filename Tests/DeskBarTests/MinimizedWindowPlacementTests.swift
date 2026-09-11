@@ -94,3 +94,15 @@ func trayKeepsAppIconsWhenNothingIsMinimized() {
 
     #expect(result.map(\.name) == ["Terminal", "Notes"])
 }
+
+@Test
+func onlyBusyAppErrorsCountAsTransientEnumerationFailures() {
+    // Carrying an app's cached windows forward is only safe while the failure is expected to
+    // clear on its own. `.apiDisabled` — Accessibility revoked mid-session — must not qualify,
+    // or every app's windows would be pinned as phantoms until permission came back.
+    #expect(AccessibilityService.isTransientEnumerationFailure(.cannotComplete))
+
+    for error in [AXError.apiDisabled, .invalidUIElement, .notImplemented, .attributeUnsupported, .noValue, .failure] {
+        #expect(!AccessibilityService.isTransientEnumerationFailure(error))
+    }
+}

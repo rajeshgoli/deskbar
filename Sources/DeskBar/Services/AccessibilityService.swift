@@ -70,11 +70,23 @@ final class AccessibilityService {
         }
     }
 
-    /// Enumerates an application's windows, distinguishing "this app has no windows" from
-    /// "the AX call failed". A busy or unresponsive app answers `kAXWindowsAttribute` with
+    /// Enumerates an application's windows, distinguishing a *transient* failure from an
+    /// authoritative answer. A busy or unresponsive app answers `kAXWindowsAttribute` with
     /// `.cannotComplete`, which is indistinguishable from an empty window list if we collapse
     /// both to `[]` — callers that maintain window state would then drop every window the app
     /// owns for that pass and re-add them later, losing their taskbar position.
+    ///
+    /// Only `.cannotComplete` counts as transient. Every other error is a lasting condition —
+    /// notably `.apiDisabled` when Accessibility permission is revoked mid-session — and must
+    /// read as "nothing to show" so callers degrade instead of pinning stale windows forever.
+    /// Whether an AX error means "ask again in a moment" rather than "this is the answer".
+    /// `.cannotComplete` is what an app returns when it is busy or has stopped answering the
+    /// accessibility port; it clears on its own. Everything else persists until something
+    /// changes outside our control, so carrying cached windows forward would strand them.
+    static func isTransientEnumerationFailure(_ error: AXError) -> Bool {
+        error == .cannotComplete
+    }
+
     func windowEnumeration(for application: NSRunningApplication) -> AXWindowEnumeration {
         let appElement = AXUIElementCreateApplication(application.processIdentifier)
         var windowsValue: CFTypeRef?
@@ -87,12 +99,12 @@ final class AccessibilityService {
         switch error {
         case .success:
             break
-        case .attributeUnsupported, .noValue:
-            // The app genuinely exposes no window list.
-            return .windows([])
-        default:
-            // .cannotComplete (busy/unresponsive), .apiDisabled, .invalidUIElement, …
+        case _ where Self.isTransientEnumerationFailure(error):
             return .unavailable
+        default:
+            // .attributeUnsupported / .noValue (no window list), .apiDisabled (permission
+            // revoked), .invalidUIElement (the app is gone), … — all authoritative.
+            return .windows([])
         }
 
         let windows = (windowsValue as? [Any])?.compactMap { value -> AXUIElement? in

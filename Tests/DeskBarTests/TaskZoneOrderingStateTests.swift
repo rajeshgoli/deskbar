@@ -112,3 +112,47 @@ func arrangedIDsAppendsUnreconciledItemsRatherThanDroppingThem() {
     #expect(state.arrangedIDs(for: ["a", "b", "surprise"]) == ["a", "b", "surprise"])
     #expect(state.arrangedIDs(for: []) == [])
 }
+
+@Test
+func parkedMinimizedWindowKeepsItsSlotIndefinitely() {
+    // A minimized window is deliberately absent from the task zone, so it must not be treated as
+    // closed. Restoring it after a long park puts it back where it was, not at the end.
+    var state = TaskZoneOrderingState()
+    let start = Date()
+    state.reconcile(currentIDs: ["a", "b", "c"], now: start)
+
+    // `b` is minimized: gone from the rendered list, still known to WindowManager.
+    let longAfterRetention = start.addingTimeInterval(
+        TaskZoneOrderingState.itemRetentionInterval * 10
+    )
+    state.reconcile(currentIDs: ["a", "c"], knownIDs: ["a", "b", "c"], now: start.addingTimeInterval(1))
+    state.reconcile(currentIDs: ["a", "c"], knownIDs: ["a", "b", "c"], now: longAfterRetention)
+    #expect(state.arrangedIDs(for: ["a", "c"]) == ["a", "c"])
+
+    state.reconcile(
+        currentIDs: ["a", "b", "c"],
+        knownIDs: ["a", "b", "c"],
+        now: longAfterRetention.addingTimeInterval(1)
+    )
+    #expect(state.arrangedIDs(for: ["a", "b", "c"]) == ["a", "b", "c"])
+}
+
+@Test
+func parkedWindowStillExpiresOnceItIsNoLongerKnown() {
+    // Closing a window while it is minimized must eventually release its slot.
+    var state = TaskZoneOrderingState()
+    let start = Date()
+    state.reconcile(currentIDs: ["a", "b", "c"], now: start)
+    state.reconcile(currentIDs: ["a", "c"], knownIDs: ["a", "b", "c"], now: start.addingTimeInterval(1))
+
+    // `b` is gone for good — no longer reported as known.
+    let afterClose = start.addingTimeInterval(2)
+    state.reconcile(currentIDs: ["a", "c"], knownIDs: ["a", "c"], now: afterClose)
+    #expect(state.orderedItemIDs == ["a", "b", "c"])
+
+    let afterRetention = afterClose.addingTimeInterval(
+        TaskZoneOrderingState.itemRetentionInterval + 1
+    )
+    state.reconcile(currentIDs: ["a", "c"], knownIDs: ["a", "c"], now: afterRetention)
+    #expect(state.orderedItemIDs == ["a", "c"])
+}

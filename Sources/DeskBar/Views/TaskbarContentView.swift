@@ -651,13 +651,19 @@ final class TaskbarContentView: NSView {
         expandedGroupView = nil
 
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let baseScopedWindows = scopedVisibleWindows()
-        let frontmostWindowID = currentFrontmostWindowID(in: baseScopedWindows)
-        let scopedWindows = smScopedWindows(baseWindows: baseScopedWindows)
+        let baseKnownWindows = scopedKnownWindows()
+        let frontmostWindowID = currentFrontmostWindowID(
+            in: baseKnownWindows.filter(WindowManager.belongsInTaskZone)
+        )
+        // `knownWindows` includes windows parked in the tray; `scopedWindows` is the subset that
+        // actually gets task buttons. Virtual SM agent tabs inherit their terminal window's
+        // minimized state, so the same predicate partitions them correctly.
+        let knownWindows = smScopedWindows(baseWindows: baseKnownWindows)
+        let scopedWindows = knownWindows.filter(WindowManager.belongsInTaskZone)
         let screen = ScreenGeometry.screen(for: displayID)
         let shouldGroupWindows = shouldGroupWindows(scopedWindows)
         if shouldGroupWindows {
-            let items = orderedGroupedTaskItems(from: scopedWindows)
+            let items = orderedGroupedTaskItems(from: scopedWindows, knownWindows: knownWindows)
             var placedViews: [TaskZonePlacedView] = []
             var retainedItemIDs = Set<String>()
 
@@ -696,7 +702,7 @@ final class TaskbarContentView: NSView {
         if !shouldGroupWindows {
             expandedGroupID = nil
         }
-        let orderedWindows = orderedUngroupedWindows(from: scopedWindows)
+        let orderedWindows = orderedUngroupedWindows(from: scopedWindows, knownWindows: knownWindows)
         let placedViews = orderedWindows.map { window in
             TaskZonePlacedView(
                 view: taskButtonView(
@@ -716,16 +722,22 @@ final class TaskbarContentView: NSView {
         schedulePreferredWidthNotification()
     }
 
-    private func scopedVisibleWindows() -> [WindowInfo] {
+    /// Every window DeskBar knows about on this display, minimized and hidden ones included.
+    /// Only `WindowManager.belongsInTaskZone` members get task buttons — the rest are parked in
+    /// the tray — but the ordering state still needs to hear about the parked ones so their slot
+    /// survives until the window is genuinely gone. See `rebuildTaskZone()`.
+    private func scopedKnownWindows() -> [WindowInfo] {
         guard let screen = ScreenGeometry.screen(for: displayID) else {
             return []
         }
 
-        // Only windows you can actually switch to earn task-zone width. A minimized or hidden
-        // window moves to the running-app tray instead — per window, so minimizing one window of
-        // an app that still has others open moves just that one. See
-        // `RunningAppTrayView.localMinimizedWindows`.
-        return windowManager.windows(on: screen).filter(WindowManager.belongsInTaskZone)
+        return windowManager.windows(on: screen)
+    }
+
+    /// The windows that actually get task buttons: known windows, SM agent tabs resolved, minus
+    /// anything parked in the tray.
+    private func scopedTaskZoneWindows() -> [WindowInfo] {
+        smScopedWindows(baseWindows: scopedKnownWindows()).filter(WindowManager.belongsInTaskZone)
     }
 
     private func smScopedWindows(baseWindows: [WindowInfo]) -> [WindowInfo] {
@@ -952,10 +964,16 @@ final class TaskbarContentView: NSView {
         }
     }
 
-    private func orderedUngroupedWindows(from windows: [WindowInfo]) -> [WindowInfo] {
+    private func orderedUngroupedWindows(
+        from windows: [WindowInfo],
+        knownWindows: [WindowInfo]
+    ) -> [WindowInfo] {
         let windows = uniqueWindowsByUngroupedTaskItemID(windows)
         let ids = windows.map(ungroupedTaskItemID(for:))
-        ungroupedTaskOrderState.reconcile(currentIDs: ids)
+        ungroupedTaskOrderState.reconcile(
+            currentIDs: ids,
+            knownIDs: Set(knownWindows.map(ungroupedTaskItemID(for:)))
+        )
 
         let orderedIDs = ungroupedTaskOrderState.arrangedIDs(for: ids)
         let windowsByID = Dictionary(preservingFirstValues: windows.map { (ungroupedTaskItemID(for: $0), $0) })
@@ -969,10 +987,16 @@ final class TaskbarContentView: NSView {
         }
     }
 
-    private func orderedGroupedTaskItems(from windows: [WindowInfo]) -> [TaskZoneItem] {
+    private func orderedGroupedTaskItems(
+        from windows: [WindowInfo],
+        knownWindows: [WindowInfo]
+    ) -> [TaskZoneItem] {
         let items = groupedTaskItems(from: windows)
         let ids = items.map(groupedTaskItemID(for:))
-        groupedTaskOrderState.reconcile(currentIDs: ids)
+        groupedTaskOrderState.reconcile(
+            currentIDs: ids,
+            knownIDs: Set(knownWindows.map(groupedTaskItemID(for:)))
+        )
 
         let orderedIDs = groupedTaskOrderState.arrangedIDs(for: ids)
         let itemsByID = Dictionary(preservingFirstValues: items.map { (groupedTaskItemID(for: $0), $0) })
@@ -1067,7 +1091,7 @@ final class TaskbarContentView: NSView {
         }
 
         if let annotation = smAnnotation(for: window),
-           let sourceWindow = scopedVisibleWindows().first(where: { $0.cgWindowID == annotation.terminalWindowID }) {
+           let sourceWindow = scopedKnownWindows().first(where: { $0.cgWindowID == annotation.terminalWindowID }) {
             return windowManager.taskbarZone(for: sourceWindow, on: screen)
         }
 
@@ -1253,7 +1277,7 @@ final class TaskbarContentView: NSView {
             return false
         }
 
-        if shouldGroupWindows(scopedVisibleWindows()) {
+        if shouldGroupWindows(scopedTaskZoneWindows()) {
             groupedTaskOrderState.applyManualOrder(reorderedIDs, userPositionedItemID: payload.itemID)
         } else {
             ungroupedTaskOrderState.applyManualOrder(reorderedIDs, userPositionedItemID: payload.itemID)
@@ -1264,7 +1288,7 @@ final class TaskbarContentView: NSView {
     }
 
     private func currentTaskOrderIDs() -> [String] {
-        let scopedWindows = smScopedWindows(baseWindows: scopedVisibleWindows())
+        let scopedWindows = scopedTaskZoneWindows()
 
         if shouldGroupWindows(scopedWindows) {
             let items = groupedTaskItems(from: scopedWindows)
@@ -2201,11 +2225,22 @@ struct TaskZoneOrderingState {
     private(set) var userPositionedItemIDs: Set<String> = []
     private var absentSinceByItemID: [String: Date] = [:]
 
-    mutating func reconcile(currentIDs: [String], now: Date = Date()) {
+    /// - Parameters:
+    ///   - currentIDs: items being rendered right now, in the order the caller produced them.
+    ///   - knownIDs: items that still exist but are deliberately not rendered — a minimized or
+    ///     hidden window parked in the tray. These hold their slot for as long as they exist, so
+    ///     restoring one puts it back where it was rather than at the end. Only items in neither
+    ///     set are on the clock.
+    mutating func reconcile(
+        currentIDs: [String],
+        knownIDs: Set<String> = [],
+        now: Date = Date()
+    ) {
         let currentIDSet = Set(currentIDs)
+        let liveIDs = currentIDSet.union(knownIDs)
 
         for itemID in orderedItemIDs {
-            if currentIDSet.contains(itemID) {
+            if liveIDs.contains(itemID) {
                 absentSinceByItemID.removeValue(forKey: itemID)
             } else if absentSinceByItemID[itemID] == nil {
                 absentSinceByItemID[itemID] = now
