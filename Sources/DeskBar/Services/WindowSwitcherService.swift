@@ -351,8 +351,9 @@ final class WindowSwitcherService {
             if settings.enableBareCommandLauncher,
                settings.appsLauncherShortcut == .commandTap,
                bareCommandDetector.handleFlagsChanged(flags) {
-                DispatchQueue.main.async {
-                    AppsLauncher.open()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    AppsLauncher.open(settings: self.settings)
                 }
             } else if !settings.enableBareCommandLauncher || settings.appsLauncherShortcut != .commandTap {
                 bareCommandDetector.cancel()
@@ -390,8 +391,9 @@ final class WindowSwitcherService {
                keyCode: keyCode,
                flags: flags
            ) {
-            DispatchQueue.main.async {
-                AppsLauncher.open()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                AppsLauncher.open(settings: self.settings)
             }
             return nil
         }

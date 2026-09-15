@@ -34,6 +34,11 @@ struct TaskbarSettingsTests {
         #expect(settings.enableBareCommandLauncher == false)
         #expect(settings.appsLauncherShortcut == .controlOptionReturn)
         #expect(settings.animateSessionManagerActivity == false)
+        #expect(settings.showNowPlayingTitles)
+        #expect(settings.launcherButtonAction == .systemApps)
+        #expect(settings.launcherCustomAppBundleID == nil)
+        #expect(settings.launcherCustomAppPath == nil)
+        #expect(settings.launcherCustomCommand == "")
     }
 
     @Test
@@ -99,6 +104,46 @@ struct TaskbarSettingsTests {
 
         #expect(settings.systemResourceWidgetPinnedDisplayID == nil)
         #expect(settings.sessionManagerWidgetPinnedDisplayID == nil)
+    }
+
+    @Test
+    func persistsNowPlayingAndLauncherButtonSettings() {
+        let suiteName = "TaskbarSettingsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+
+        defaults.removePersistentDomain(forName: suiteName)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        var settings = TaskbarSettings(defaults: defaults)
+        settings.showNowPlayingTitles = false
+        settings.launcherButtonAction = .customApp
+        settings.launcherCustomAppBundleID = "com.apple.Finder"
+        settings.launcherCustomAppPath = "/System/Library/CoreServices/Finder.app"
+        settings.launcherCustomCommand = "open https://example.com"
+
+        settings = TaskbarSettings(defaults: defaults)
+
+        #expect(settings.showNowPlayingTitles == false)
+        #expect(settings.launcherButtonAction == .customApp)
+        #expect(settings.launcherCustomAppBundleID == "com.apple.Finder")
+        #expect(settings.launcherCustomAppPath == "/System/Library/CoreServices/Finder.app")
+        #expect(settings.launcherCustomCommand == "open https://example.com")
+
+        settings.launcherButtonAction = .hidden
+        settings.launcherCustomAppBundleID = nil
+        settings.launcherCustomAppPath = nil
+        settings.launcherCustomCommand = ""
+        settings.showNowPlayingTitles = true
+
+        settings = TaskbarSettings(defaults: defaults)
+
+        #expect(settings.showNowPlayingTitles)
+        #expect(settings.launcherButtonAction == .hidden)
+        #expect(settings.launcherCustomAppBundleID == nil)
+        #expect(settings.launcherCustomAppPath == nil)
+        #expect(settings.launcherCustomCommand == "")
     }
 
     @Test

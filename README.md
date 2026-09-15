@@ -15,6 +15,7 @@ Lightweight, native, no external dependencies. Does not modify any system settin
 - **Three-zone layout** — Launcher (pinned apps) | Task Zone (windows) | Running-App Tray
 - **System resource widget** — collapsible MEM/CPU/GPU widget with per-metric toggles and Activity Monitor history shortcuts
 - **Per-window switching** — click a task button to raise that specific window, not all windows from the app
+- **Now Playing titles** — the playing app's task buttons show `Artist – Title` while playing, falling back to the window title when paused
 - **AltTab-style window switcher** — Option+Tab cycles individual windows with a bold glass thumbnail overlay
 - **Dock-style right-click menus** — task and launcher menus expose windows plus Show All Windows, Hide, Quit, and launcher options
 - **Real-time updates** — windows appear/disappear as you open/close them, no polling lag
@@ -118,14 +119,14 @@ requirement, so the permissions have to be granted once more after a switch.
 |--------|-------------|
 | **Click** a task button | Raises that specific window |
 | **Right-click** a task button | Dock-style menu: window list, Show All Windows, Hide, Pin, Blacklist, Quit |
-| **Click** the Apps button | Opens the macOS Apps launcher |
+| **Click** the Apps button | Opens the configured launcher target (macOS Apps launcher by default; remappable to another app, URL/command, or hidden in Settings > Launcher) |
 | **Click** a launcher icon | Activates the app (launches if not running) |
 | **Right-click** a launcher icon | Dock-style menu: app-specific actions, window list, Options, Show All Windows, Hide, Quit |
 | **Option+Tab** | Opens the window switcher and advances to the next window |
 | **Shift+Option+Tab** | Moves backward in the window switcher |
 | **Release Option** | Activates the highlighted window |
 | **Escape** while switching | Cancels the switcher without changing windows |
-| **Apps launcher shortcut** | Opens the macOS Apps launcher; defaults to Control-Option-Return and can be changed in Settings |
+| **Apps launcher shortcut** | Opens the configured launcher target; defaults to Control-Option-Return and can be changed in Settings |
 | **Hover** a task button | Shows live window thumbnail (if Screen Recording granted) |
 | **Middle-click** a task button | Closes that window |
 | **Click a tray icon** | Activates the app, or reopens it if it is running without windows |
@@ -140,9 +141,9 @@ Accessible via the gear icon in the menu bar.
 |-----|---------|
 | General | Start at login, Dock mode |
 | Appearance | DeskBar layout, taskbar height, font size, max button width, show titles, thumbnail size, reset sliders |
-| Behavior | Hover delay, group by app, drag reorder, middle-click closes, attention/progress indicators, activity mode, show over full-screen, multi-monitor, Alt-Tab / Option-Tab, Apps launcher shortcut |
+| Behavior | Hover delay, group by app, drag reorder, middle-click closes, attention/progress indicators, activity mode, show over full-screen, multi-monitor, Alt-Tab / Option-Tab, Apps launcher shortcut, Now Playing song titles |
 | Widgets | System resource widget on/off, display pinning, memory/CPU/GPU metric toggles |
-| Launcher | Manage pinned apps |
+| Launcher | Launcher button target (System Apps, custom app, custom command/URL, hidden) plus manage pinned apps |
 | Blacklist | Manage hidden apps |
 
 ## Requirements

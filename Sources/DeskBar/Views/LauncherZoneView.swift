@@ -7,6 +7,7 @@ final class LauncherZoneView: NSStackView {
     private let pinnedAppManager: PinnedAppManager
     private let windowManager: WindowManager
     private let displayID: CGDirectDisplayID
+    private let openSettingsHandler: (() -> Void)?
     private let buttonsStackView = NSStackView()
     private let dividerView = NSView()
     private var cancellables = Set<AnyCancellable>()
@@ -17,12 +18,14 @@ final class LauncherZoneView: NSStackView {
         settings: TaskbarSettings,
         pinnedAppManager: PinnedAppManager,
         windowManager: WindowManager,
-        displayID: CGDirectDisplayID
+        displayID: CGDirectDisplayID,
+        openSettingsHandler: (() -> Void)? = nil
     ) {
         self.settings = settings
         self.pinnedAppManager = pinnedAppManager
         self.windowManager = windowManager
         self.displayID = displayID
+        self.openSettingsHandler = openSettingsHandler
         super.init(frame: .zero)
 
         orientation = .horizontal
@@ -102,6 +105,36 @@ final class LauncherZoneView: NSStackView {
             }
             .store(in: &cancellables)
 
+        settings.$launcherButtonAction
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.scheduleRebuild()
+            }
+            .store(in: &cancellables)
+
+        settings.$launcherCustomAppBundleID
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.iconCache.removeAll()
+                self?.scheduleRebuild()
+            }
+            .store(in: &cancellables)
+
+        settings.$launcherCustomAppPath
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.iconCache.removeAll()
+                self?.scheduleRebuild()
+            }
+            .store(in: &cancellables)
+
+        settings.$launcherCustomCommand
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.scheduleRebuild()
+            }
+            .store(in: &cancellables)
+
         pinnedAppManager.$pinnedApps
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -162,7 +195,11 @@ final class LauncherZoneView: NSStackView {
             view.removeFromSuperview()
         }
 
-        buttonsStackView.addArrangedSubview(AppsLauncherButtonView())
+        let launcherButtonView = AppsLauncherButtonView(settings: settings, openSettingsHandler: openSettingsHandler)
+        // Hidden arranged subviews are excluded from preferredContentWidth, so
+        // the taskbar reclaims the button's width in compact layouts.
+        launcherButtonView.isHidden = settings.launcherButtonAction == .hidden
+        buttonsStackView.addArrangedSubview(launcherButtonView)
 
         let runningApplicationsByBundleIdentifier: [String: NSRunningApplication] =
             NSWorkspace.shared.runningApplications.reduce(into: [:]) { result, application in
