@@ -27,6 +27,13 @@ enum AppsLauncherShortcut: String, CaseIterable {
     case optionSpace
 }
 
+enum LauncherButtonAction: String, CaseIterable {
+    case systemApps
+    case customApp
+    case customCommand
+    case hidden
+}
+
 class TaskbarSettings: ObservableObject {
     static let defaultTaskbarHeight: CGFloat = 40
     static let defaultTitleFontSize: CGFloat = 12
@@ -159,6 +166,38 @@ class TaskbarSettings: ObservableObject {
         didSet { defaults.set(appsLauncherShortcut.rawValue, forKey: "appsLauncherShortcut") }
     }
 
+    @Published var showNowPlayingTitles: Bool {
+        didSet { defaults.set(showNowPlayingTitles, forKey: "showNowPlayingTitles") }
+    }
+
+    @Published var launcherButtonAction: LauncherButtonAction {
+        didSet { defaults.set(launcherButtonAction.rawValue, forKey: "launcherButtonAction") }
+    }
+
+    @Published var launcherCustomAppBundleID: String? {
+        didSet {
+            if let launcherCustomAppBundleID {
+                defaults.set(launcherCustomAppBundleID, forKey: "launcherCustomAppBundleID")
+            } else {
+                defaults.removeObject(forKey: "launcherCustomAppBundleID")
+            }
+        }
+    }
+
+    @Published var launcherCustomAppPath: String? {
+        didSet {
+            if let launcherCustomAppPath {
+                defaults.set(launcherCustomAppPath, forKey: "launcherCustomAppPath")
+            } else {
+                defaults.removeObject(forKey: "launcherCustomAppPath")
+            }
+        }
+    }
+
+    @Published var launcherCustomCommand: String {
+        didSet { defaults.set(launcherCustomCommand, forKey: "launcherCustomCommand") }
+    }
+
     @Published var enableSessionManagerPlugin: Bool {
         didSet { defaults.set(enableSessionManagerPlugin, forKey: "enableSessionManagerPlugin") }
     }
@@ -228,6 +267,11 @@ class TaskbarSettings: ObservableObject {
         enableWindowSwitcher = defaults.object(forKey: "enableWindowSwitcher") as? Bool ?? false
         enableBareCommandLauncher = defaults.object(forKey: "enableBareCommandLauncher") as? Bool ?? false
         appsLauncherShortcut = AppsLauncherShortcut(rawValue: defaults.string(forKey: "appsLauncherShortcut") ?? "") ?? .controlOptionReturn
+        showNowPlayingTitles = defaults.object(forKey: "showNowPlayingTitles") as? Bool ?? true
+        launcherButtonAction = LauncherButtonAction(rawValue: defaults.string(forKey: "launcherButtonAction") ?? "") ?? .systemApps
+        launcherCustomAppBundleID = defaults.string(forKey: "launcherCustomAppBundleID")
+        launcherCustomAppPath = defaults.string(forKey: "launcherCustomAppPath")
+        launcherCustomCommand = defaults.string(forKey: "launcherCustomCommand") ?? ""
         enableSessionManagerPlugin = defaults.object(forKey: "enableSessionManagerPlugin") as? Bool ?? true
         showSessionManagerAgentTitles = defaults.object(forKey: "showSessionManagerAgentTitles") as? Bool ?? true
         showSessionManagerActivityIndicators = defaults.object(forKey: "showSessionManagerActivityIndicators") as? Bool ?? true
