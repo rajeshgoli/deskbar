@@ -30,6 +30,7 @@ struct TaskbarSettingsTests {
         #expect(settings.sessionManagerWidgetPinnedDisplayID == nil)
         #expect(settings.layoutMode == .fullWidth)
         #expect(settings.enableWindowSwitcher == false)
+        #expect(settings.disableSwitcherInFullScreen == false)
         #expect(settings.enableBareCommandLauncher == false)
         #expect(settings.appsLauncherShortcut == .controlOptionReturn)
         #expect(settings.animateSessionManagerActivity == false)
@@ -64,6 +65,7 @@ struct TaskbarSettingsTests {
         var settings = TaskbarSettings(defaults: defaults)
         settings.layoutMode = .fullWidthGlass
         settings.enableWindowSwitcher = false
+        settings.disableSwitcherInFullScreen = true
         settings.enableBareCommandLauncher = false
         settings.appsLauncherShortcut = .optionSpace
         settings.showSystemResourceWidget = false
@@ -79,6 +81,7 @@ struct TaskbarSettingsTests {
 
         #expect(settings.layoutMode == .fullWidthGlass)
         #expect(settings.enableWindowSwitcher == false)
+        #expect(settings.disableSwitcherInFullScreen)
         #expect(settings.enableBareCommandLauncher == false)
         #expect(settings.appsLauncherShortcut == .optionSpace)
         #expect(settings.showSystemResourceWidget == false)

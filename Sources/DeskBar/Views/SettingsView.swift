@@ -60,6 +60,7 @@ final class SettingsView: NSView {
     private let showSessionManagerWidgetCheckbox = NSButton(checkboxWithTitle: "Show SM widget", target: nil, action: nil)
     private let sessionManagerWidgetDisplayPopupButton = NSPopUpButton()
     private let enableWindowSwitcherCheckbox = NSButton(checkboxWithTitle: "Enable Alt-Tab / Option-Tab window switcher", target: nil, action: nil)
+    private let disableSwitcherInFullScreenCheckbox = NSButton(checkboxWithTitle: "Disable window switcher in full-screen apps", target: nil, action: nil)
     private let enableBareCommandLauncherCheckbox = NSButton(checkboxWithTitle: "Enable Apps launcher shortcut", target: nil, action: nil)
     private let appsLauncherShortcutPopupButton = NSPopUpButton()
     private let enableSessionManagerPluginCheckbox = NSButton(checkboxWithTitle: "Enable Session Manager plugin", target: nil, action: nil)
@@ -168,6 +169,7 @@ final class SettingsView: NSView {
             makeCheckboxRow(showOverFullscreenAppsCheckbox),
             makeCheckboxRow(showOnAllMonitorsCheckbox),
             makeCheckboxRow(enableWindowSwitcherCheckbox),
+            makeCheckboxRow(disableSwitcherInFullScreenCheckbox),
             makeCheckboxRow(enableBareCommandLauncherCheckbox),
             makeLabeledControlRow(label: "Apps launcher shortcut", control: appsLauncherShortcutPopupButton)
         ])
@@ -423,6 +425,9 @@ final class SettingsView: NSView {
 
         enableWindowSwitcherCheckbox.target = self
         enableWindowSwitcherCheckbox.action = #selector(enableWindowSwitcherChanged(_:))
+
+        disableSwitcherInFullScreenCheckbox.target = self
+        disableSwitcherInFullScreenCheckbox.action = #selector(disableSwitcherInFullScreenChanged(_:))
 
         enableBareCommandLauncherCheckbox.target = self
         enableBareCommandLauncherCheckbox.action = #selector(enableBareCommandLauncherChanged(_:))
@@ -681,6 +686,14 @@ final class SettingsView: NSView {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
                 self?.enableWindowSwitcherCheckbox.state = value ? .on : .off
+                self?.disableSwitcherInFullScreenCheckbox.isEnabled = value
+            }
+            .store(in: &cancellables)
+
+        settings.$disableSwitcherInFullScreen
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.disableSwitcherInFullScreenCheckbox.state = value ? .on : .off
             }
             .store(in: &cancellables)
 
@@ -936,7 +949,7 @@ final class SettingsView: NSView {
 
     private func makeSwitcherExclusionView() -> NSView {
         let container = NSView()
-        let descriptionLabel = NSTextField(labelWithString: "Excluded apps stay on the taskbar but are skipped in the Option-Tab window switcher.")
+        let descriptionLabel = NSTextField(labelWithString: "Excluded apps stay on the taskbar but are skipped in the Option-Tab window switcher. When an excluded app is frontmost, Option-Tab is passed straight through to it.")
         descriptionLabel.textColor = .secondaryLabelColor
         descriptionLabel.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1562,6 +1575,11 @@ final class SettingsView: NSView {
     @objc
     private func enableWindowSwitcherChanged(_ sender: NSButton) {
         settings.enableWindowSwitcher = sender.state == .on
+    }
+
+    @objc
+    private func disableSwitcherInFullScreenChanged(_ sender: NSButton) {
+        settings.disableSwitcherInFullScreen = sender.state == .on
     }
 
     @objc

@@ -404,6 +404,15 @@ final class WindowSwitcherService {
             return Unmanaged.passUnretained(event)
         }
 
+        if Self.shouldSuppressSwitcher(
+            frontmostBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            excludedBundleIDs: switcherExclusionManager.excludedBundleIDs,
+            disableInFullScreen: settings.disableSwitcherInFullScreen,
+            frontmostIsFullScreen: settings.disableSwitcherInFullScreen && isFrontmostAppFullScreen()
+        ) {
+            return Unmanaged.passUnretained(event)
+        }
+
         if type == .keyDown {
             let reverse = flags.contains(.maskShift)
             Task { @MainActor [weak self] in
@@ -412,6 +421,33 @@ final class WindowSwitcherService {
         }
 
         return nil
+    }
+
+    /// Pure decision helper for switcher suppression. DeskBar ignores the
+    /// keypress (the frontmost app receives it) when the frontmost app opted
+    /// out via the exclusion list, or when fullscreen suppression is enabled
+    /// and the frontmost app owns a fullscreen window.
+    static func shouldSuppressSwitcher(
+        frontmostBundleID: String?,
+        excludedBundleIDs: Set<String>,
+        disableInFullScreen: Bool,
+        frontmostIsFullScreen: Bool
+    ) -> Bool {
+        if let frontmostBundleID, excludedBundleIDs.contains(frontmostBundleID) {
+            return true
+        }
+
+        return disableInFullScreen && frontmostIsFullScreen
+    }
+
+    private func isFrontmostAppFullScreen() -> Bool {
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else {
+            return false
+        }
+
+        return accessibilityService.enumerateWindows(for: frontmost).contains {
+            accessibilityService.isFullScreen(element: $0)
+        }
     }
 
     @MainActor

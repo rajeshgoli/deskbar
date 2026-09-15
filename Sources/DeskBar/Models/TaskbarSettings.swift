@@ -151,6 +151,10 @@ class TaskbarSettings: ObservableObject {
         didSet { defaults.set(enableWindowSwitcher, forKey: "enableWindowSwitcher") }
     }
 
+    @Published var disableSwitcherInFullScreen: Bool {
+        didSet { defaults.set(disableSwitcherInFullScreen, forKey: "disableSwitcherInFullScreen") }
+    }
+
     @Published var enableBareCommandLauncher: Bool {
         didSet { defaults.set(enableBareCommandLauncher, forKey: "enableBareCommandLauncher") }
     }
@@ -226,6 +230,7 @@ class TaskbarSettings: ObservableObject {
         showOnAllMonitors = defaults.object(forKey: "showOnAllMonitors") as? Bool ?? true
         layoutMode = DeskBarLayoutMode(rawValue: defaults.string(forKey: "layoutMode") ?? "") ?? .fullWidth
         enableWindowSwitcher = defaults.object(forKey: "enableWindowSwitcher") as? Bool ?? false
+        disableSwitcherInFullScreen = defaults.object(forKey: "disableSwitcherInFullScreen") as? Bool ?? false
         enableBareCommandLauncher = defaults.object(forKey: "enableBareCommandLauncher") as? Bool ?? false
         appsLauncherShortcut = AppsLauncherShortcut(rawValue: defaults.string(forKey: "appsLauncherShortcut") ?? "") ?? .controlOptionReturn
         enableSessionManagerPlugin = defaults.object(forKey: "enableSessionManagerPlugin") as? Bool ?? true

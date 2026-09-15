@@ -181,6 +181,58 @@ func switchableWindowsKeepWindowsWithoutBundleIdentifier() {
 }
 
 @Test
+func shouldSuppressSwitcherWhenFrontmostAppExcluded() {
+    #expect(
+        WindowSwitcherService.shouldSuppressSwitcher(
+            frontmostBundleID: "com.example.game",
+            excludedBundleIDs: ["com.example.game"],
+            disableInFullScreen: false,
+            frontmostIsFullScreen: false
+        )
+    )
+}
+
+@Test
+func shouldNotSuppressSwitcherForNonExcludedWindowedApp() {
+    #expect(
+        !WindowSwitcherService.shouldSuppressSwitcher(
+            frontmostBundleID: "com.example.safari",
+            excludedBundleIDs: ["com.example.game"],
+            disableInFullScreen: true,
+            frontmostIsFullScreen: false
+        )
+    )
+    #expect(
+        !WindowSwitcherService.shouldSuppressSwitcher(
+            frontmostBundleID: nil,
+            excludedBundleIDs: ["com.example.game"],
+            disableInFullScreen: false,
+            frontmostIsFullScreen: false
+        )
+    )
+}
+
+@Test
+func shouldSuppressSwitcherForFullscreenOnlyWhenEnabled() {
+    #expect(
+        WindowSwitcherService.shouldSuppressSwitcher(
+            frontmostBundleID: "com.example.game",
+            excludedBundleIDs: [],
+            disableInFullScreen: true,
+            frontmostIsFullScreen: true
+        )
+    )
+    #expect(
+        !WindowSwitcherService.shouldSuppressSwitcher(
+            frontmostBundleID: "com.example.game",
+            excludedBundleIDs: [],
+            disableInFullScreen: false,
+            frontmostIsFullScreen: true
+        )
+    )
+}
+
+@Test
 func nextSelectionStartsAfterCurrentWindow() {
     let ids = ["one", "two", "three"]
 
