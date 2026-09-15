@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import UniformTypeIdentifiers
 
 final class SettingsView: NSView {
     private struct AppEntry {
@@ -56,6 +57,7 @@ final class SettingsView: NSView {
     private let enableWindowSwitcherCheckbox = NSButton(checkboxWithTitle: "Enable Alt-Tab / Option-Tab window switcher", target: nil, action: nil)
     private let enableBareCommandLauncherCheckbox = NSButton(checkboxWithTitle: "Enable Apps launcher shortcut", target: nil, action: nil)
     private let appsLauncherShortcutPopupButton = NSPopUpButton()
+    private let showNowPlayingTitlesCheckbox = NSButton(checkboxWithTitle: "Show currently playing song as window title", target: nil, action: nil)
     private let enableSessionManagerPluginCheckbox = NSButton(checkboxWithTitle: "Enable Session Manager plugin", target: nil, action: nil)
     private let showSessionManagerAgentTitlesCheckbox = NSButton(checkboxWithTitle: "Use SM friendly names for agent tasks", target: nil, action: nil)
     private let showSessionManagerActivityIndicatorsCheckbox = NSButton(checkboxWithTitle: "Show SM activity indicators", target: nil, action: nil)
@@ -66,6 +68,11 @@ final class SettingsView: NSView {
     private let launcherTableView = NSTableView()
     private let launcherScrollView = NSScrollView()
     private let removePinnedAppButton = NSButton(title: "Remove", target: nil, action: nil)
+    private let launcherButtonActionPopupButton = NSPopUpButton()
+    private let launcherCustomAppLabel = NSTextField(labelWithString: "No app selected")
+    private let chooseLauncherAppButton = NSButton(title: "Choose App…", target: nil, action: nil)
+    private let launcherCustomCommandField = NSTextField(string: "")
+    private let testLauncherButton = NSButton(title: "Test", target: nil, action: nil)
     private let blacklistTableView = NSTableView()
     private let blacklistScrollView = NSScrollView()
     private let removeBlacklistButton = NSButton(title: "Remove", target: nil, action: nil)
@@ -113,6 +120,10 @@ final class SettingsView: NSView {
         dockModePopupButton.addItems(withTitles: ["Independent", "Auto-Hide Dock", "Hide Dock"])
         layoutModePopupButton.addItems(withTitles: ["Full Width", "Full Width Glass", "Compact Centered", "Compact Glass"])
         appsLauncherShortcutPopupButton.addItems(withTitles: ["Control-Option-Return", "Option-Space", "Control-Option-Space", "Tap Command"])
+        launcherButtonActionPopupButton.addItems(withTitles: ["System Apps", "Custom App", "Custom Command", "Hidden"])
+        launcherCustomAppLabel.lineBreakMode = .byTruncatingMiddle
+        launcherCustomCommandField.placeholderString = "https://… or shell command"
+        launcherCustomCommandField.isContinuous = true
         configureWidgetDisplayPopupButton()
         configureSessionManagerWidgetDisplayPopupButton()
         configureLauncherTableView()
@@ -153,7 +164,8 @@ final class SettingsView: NSView {
             makeCheckboxRow(showOnAllMonitorsCheckbox),
             makeCheckboxRow(enableWindowSwitcherCheckbox),
             makeCheckboxRow(enableBareCommandLauncherCheckbox),
-            makeLabeledControlRow(label: "Apps launcher shortcut", control: appsLauncherShortcutPopupButton)
+            makeLabeledControlRow(label: "Apps launcher shortcut", control: appsLauncherShortcutPopupButton),
+            makeCheckboxRow(showNowPlayingTitlesCheckbox)
         ])
 
         let widgetsTab = NSTabViewItem(identifier: "widgets")
@@ -384,6 +396,21 @@ final class SettingsView: NSView {
 
         appsLauncherShortcutPopupButton.target = self
         appsLauncherShortcutPopupButton.action = #selector(appsLauncherShortcutChanged(_:))
+
+        showNowPlayingTitlesCheckbox.target = self
+        showNowPlayingTitlesCheckbox.action = #selector(showNowPlayingTitlesChanged(_:))
+
+        launcherButtonActionPopupButton.target = self
+        launcherButtonActionPopupButton.action = #selector(launcherButtonActionChanged(_:))
+
+        chooseLauncherAppButton.target = self
+        chooseLauncherAppButton.action = #selector(chooseLauncherApp(_:))
+
+        launcherCustomCommandField.target = self
+        launcherCustomCommandField.action = #selector(launcherCustomCommandChanged(_:))
+
+        testLauncherButton.target = self
+        testLauncherButton.action = #selector(testLauncherButtonAction(_:))
 
         enableSessionManagerPluginCheckbox.target = self
         enableSessionManagerPluginCheckbox.action = #selector(enableSessionManagerPluginChanged(_:))
@@ -660,6 +687,57 @@ final class SettingsView: NSView {
             }
             .store(in: &cancellables)
 
+        settings.$showNowPlayingTitles
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.showNowPlayingTitlesCheckbox.state = value ? .on : .off
+            }
+            .store(in: &cancellables)
+
+        settings.$launcherButtonAction
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                let index: Int
+                switch value {
+                case .systemApps:
+                    index = 0
+                case .customApp:
+                    index = 1
+                case .customCommand:
+                    index = 2
+                case .hidden:
+                    index = 3
+                }
+
+                self?.launcherButtonActionPopupButton.selectItem(at: index)
+                self?.updateLauncherButtonControlsState()
+            }
+            .store(in: &cancellables)
+
+        settings.$launcherCustomAppBundleID
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateLauncherCustomAppLabel()
+            }
+            .store(in: &cancellables)
+
+        settings.$launcherCustomAppPath
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateLauncherCustomAppLabel()
+            }
+            .store(in: &cancellables)
+
+        settings.$launcherCustomCommand
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                if self?.launcherCustomCommandField.stringValue != value {
+                    self?.launcherCustomCommandField.stringValue = value
+                }
+                self?.updateLauncherButtonControlsState()
+            }
+            .store(in: &cancellables)
+
         settings.$enableSessionManagerPlugin
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
@@ -801,6 +879,26 @@ final class SettingsView: NSView {
 
     private func makeLauncherView() -> NSView {
         let container = NSView()
+
+        let sectionLabel = NSTextField(labelWithString: "Launcher Button")
+        sectionLabel.font = NSFont.boldSystemFont(ofSize: 13)
+
+        let actionRow = makeLabeledControlRow(label: "Button action", control: launcherButtonActionPopupButton)
+
+        let appNameLabel = NSTextField(labelWithString: "Custom app")
+        appNameLabel.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        let appRow = NSStackView(views: [appNameLabel, launcherCustomAppLabel, chooseLauncherAppButton])
+        appRow.orientation = .horizontal
+        appRow.alignment = .centerY
+        appRow.distribution = .fill
+        appRow.spacing = 12
+
+        let commandRow = makeLabeledControlRow(label: "Command or URL", control: launcherCustomCommandField)
+        let testRow = makeButtonRow(testLauncherButton)
+
+        let pinnedLabel = NSTextField(labelWithString: "Pinned Apps")
+        pinnedLabel.font = NSFont.boldSystemFont(ofSize: 13)
+
         let buttonRow = NSStackView(views: [removePinnedAppButton])
         buttonRow.orientation = .horizontal
         buttonRow.alignment = .centerY
@@ -809,18 +907,47 @@ final class SettingsView: NSView {
 
         removePinnedAppButton.isEnabled = false
 
+        for subview in [sectionLabel, actionRow, appRow, commandRow, testRow, pinnedLabel] {
+            subview.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(subview)
+        }
+
         container.addSubview(launcherScrollView)
         container.addSubview(buttonRow)
 
         NSLayoutConstraint.activate([
+            sectionLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            sectionLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            sectionLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
+
+            actionRow.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            actionRow.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            actionRow.topAnchor.constraint(equalTo: sectionLabel.bottomAnchor, constant: 8),
+
+            appRow.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            appRow.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            appRow.topAnchor.constraint(equalTo: actionRow.bottomAnchor, constant: 8),
+
+            commandRow.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            commandRow.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            commandRow.topAnchor.constraint(equalTo: appRow.bottomAnchor, constant: 8),
+
+            testRow.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            testRow.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            testRow.topAnchor.constraint(equalTo: commandRow.bottomAnchor, constant: 8),
+
+            pinnedLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            pinnedLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            pinnedLabel.topAnchor.constraint(equalTo: testRow.bottomAnchor, constant: 12),
+
             launcherScrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
             launcherScrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
-            launcherScrollView.topAnchor.constraint(equalTo: container.topAnchor, constant: 20),
-            launcherScrollView.bottomAnchor.constraint(equalTo: buttonRow.topAnchor, constant: -12),
-            launcherScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 240),
+            launcherScrollView.topAnchor.constraint(equalTo: pinnedLabel.bottomAnchor, constant: 8),
+            launcherScrollView.bottomAnchor.constraint(equalTo: buttonRow.topAnchor, constant: -8),
+            launcherScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 160),
 
             buttonRow.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
-            buttonRow.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -20)
+            buttonRow.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -16)
         ])
 
         return container
@@ -978,6 +1105,27 @@ final class SettingsView: NSView {
     private func updateBlacklistButtonState() {
         let selectedRow = blacklistTableView.selectedRow
         removeBlacklistButton.isEnabled = blacklistEntries.indices.contains(selectedRow)
+    }
+
+    private func updateLauncherButtonControlsState() {
+        let isCustomApp = settings.launcherButtonAction == .customApp
+        let isCustomCommand = settings.launcherButtonAction == .customCommand
+        chooseLauncherAppButton.isEnabled = isCustomApp
+        launcherCustomAppLabel.textColor = isCustomApp ? .labelColor : .secondaryLabelColor
+        launcherCustomCommandField.isEnabled = isCustomCommand
+        launcherCustomCommandField.isEditable = isCustomCommand
+        testLauncherButton.isEnabled = settings.launcherButtonAction != .hidden
+        updateLauncherCustomAppLabel()
+    }
+
+    private func updateLauncherCustomAppLabel() {
+        if let url = AppsLauncher.customAppURL(settings: settings) {
+            launcherCustomAppLabel.stringValue = FileManager.default.displayName(atPath: url.path)
+        } else if settings.launcherCustomAppBundleID != nil || settings.launcherCustomAppPath != nil {
+            launcherCustomAppLabel.stringValue = "App not found"
+        } else {
+            launcherCustomAppLabel.stringValue = "No app selected"
+        }
     }
 
     private func updateWidgetControlsState() {
@@ -1351,6 +1499,64 @@ final class SettingsView: NSView {
         default:
             settings.appsLauncherShortcut = .controlOptionReturn
         }
+    }
+
+    @objc
+    private func showNowPlayingTitlesChanged(_ sender: NSButton) {
+        settings.showNowPlayingTitles = sender.state == .on
+    }
+
+    @objc
+    private func launcherButtonActionChanged(_ sender: NSPopUpButton) {
+        switch sender.indexOfSelectedItem {
+        case 1:
+            settings.launcherButtonAction = .customApp
+        case 2:
+            settings.launcherButtonAction = .customCommand
+        case 3:
+            settings.launcherButtonAction = .hidden
+        default:
+            settings.launcherButtonAction = .systemApps
+        }
+    }
+
+    @objc
+    private func chooseLauncherApp(_ sender: NSButton) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.message = "Choose an app for the launcher button"
+
+        let finish: (URL?) -> Void = { [weak self] url in
+            guard let self, let url else { return }
+            let bundleID = Bundle(url: url)?.bundleIdentifier
+                ?? url.deletingPathExtension().lastPathComponent
+            self.settings.launcherCustomAppBundleID = bundleID
+            self.settings.launcherCustomAppPath = url.path
+            self.settings.launcherButtonAction = .customApp
+        }
+
+        if let window = self.window {
+            panel.beginSheetModal(for: window) { response in
+                finish(response == .OK ? panel.url : nil)
+            }
+        } else {
+            finish(panel.runModal() == .OK ? panel.url : nil)
+        }
+    }
+
+    @objc
+    private func launcherCustomCommandChanged(_ sender: NSTextField) {
+        settings.launcherCustomCommand = sender.stringValue
+    }
+
+    @objc
+    private func testLauncherButtonAction(_ sender: NSButton) {
+        settings.launcherCustomCommand = launcherCustomCommandField.stringValue
+        AppsLauncher.open(settings: settings)
     }
 
     @objc
