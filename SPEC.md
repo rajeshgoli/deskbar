@@ -309,6 +309,8 @@ Window-level task buttons for the current Space/monitor. This is the primary wor
 
 **Content:** One button per eligible window (see Window Identity Model eligibility rules), filtered to the current Space and monitor (see Space and monitor scoping). Each button shows app icon + window title.
 
+**Now Playing titles.** When "Show currently playing song as window title" is enabled and system Now Playing reports a playing track whose source app matches the window's app, the button shows `Artist – Title` instead of the window title (display-layer override only — `WindowInfo.title`, identity, and dedup are untouched). Paused/stopped sources fall back to the normal window title. The tooltip keeps the raw window title as a second line.
+
 **Minimized and hidden window rules.** Whether minimized/hidden windows appear in the Task Zone or cause the app to move to the tray depends on whether the app has ANY visible (non-minimized, non-hidden) local windows:
 
 - **Mixed state (some visible, some minimized/hidden):** The visible windows appear as normal Task Zone buttons. The minimized/hidden windows ALSO appear as Task Zone buttons with visual indicators:
@@ -455,7 +457,8 @@ TaskbarContentView
 | Multi-monitor | `NSScreen.screens` + `didChangeScreenParametersNotification` |
 | Settings persistence | `UserDefaults(suiteName: "com.deskbar.app")` |
 | Start at login | Write LaunchAgent plist to `~/Library/LaunchAgents/` |
-| Open Apps launcher | `NSWorkspace.openApplication` for `com.apple.apps.launcher` |
+| Open Apps launcher | `NSWorkspace.openApplication` for `com.apple.apps.launcher` (default launcher-button target; remappable to a custom app, URL/shell command, or hidden via Settings > Launcher) |
+| Now Playing song titles | `/usr/bin/osascript` bridge to `MRNowPlayingRequest` + per-app AppleScript (Music, Spotify), polled every 2s, display-layer override only while playing |
 | System resource widget | Mach processor ticks + memorystatus sysctls + IOAccelerator performance statistics |
 | Open Activity Monitor panes | `NSWorkspace.OpenConfiguration` + best-effort AppleScript navigation |
 | Hide Dock | `defaults write com.apple.dock autohide` + `killall Dock` |
@@ -553,6 +556,10 @@ Settings table:
 | Enable Alt-Tab / Option-Tab window switcher | true |
 | Enable Apps launcher shortcut | true |
 | Apps launcher shortcut | `controlOptionReturn` (options: `controlOptionReturn`, `optionSpace`, `controlOptionSpace`, `commandTap`) |
+| Show currently playing song as window title | true |
+| Launcher button action | `systemApps` (options: `systemApps`, `customApp`, `customCommand`, `hidden`) |
+| Launcher custom app (bundle ID + path) | unset (falls back to System Apps) |
+| Launcher custom command or URL | empty (no-op until set) |
 
 Appearance includes a "Reset Sliders to Defaults" action that restores taskbar height, title font size, max task width, and thumbnail size to their default values.
 
@@ -590,7 +597,7 @@ Create: `LoginItemManager.swift`, `DockManager.swift`, `AppsLauncherButtonView.s
 
 - LaunchAgent plist for start-at-login
 - Dock coexistence: three-mode DockManager (`independent`/`autoHide`/`hidden`), prior-state persistence to `~/.config/deskbar/dock-prior-state.json`, defense-in-depth restore (applicationWillTerminate, SIGTERM/SIGINT handlers, companion watchdog LaunchAgent). See Dock Coexistence section.
-- Apps launcher button at the left edge of the Launcher Zone
+- Apps launcher button at the left edge of the Launcher Zone. Remappable via Settings > Launcher to a custom app, a URL/shell command, or hidden entirely. The Apps launcher keyboard shortcut follows the remap (hidden disables both button and shortcut). Unresolvable custom targets fall back to System Apps.
 - Multi-monitor: taskbar panel per screen, each panel scoped to its own display's windows. Display-scoped full-screen scan hides only the affected panel. See Spaces and Full-Screen Behavior.
 - App bundle packaging script
 - Codesign with a persistent local certificate (`config/signing.env`), so the macOS Accessibility and Screen Recording grants survive a rebuild instead of being re-prompted for each install. Ad-hoc signing remains the fallback when that certificate is absent.

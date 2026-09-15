@@ -195,10 +195,11 @@ final class LauncherZoneView: NSStackView {
             view.removeFromSuperview()
         }
 
-        buttonsStackView.addArrangedSubview(
-            AppsLauncherButtonView(settings: settings, openSettingsHandler: openSettingsHandler)
-        )
-        buttonsStackView.arrangedSubviews.last?.isHidden = settings.launcherButtonAction == .hidden
+        let launcherButtonView = AppsLauncherButtonView(settings: settings, openSettingsHandler: openSettingsHandler)
+        // Hidden arranged subviews are excluded from preferredContentWidth, so
+        // the taskbar reclaims the button's width in compact layouts.
+        launcherButtonView.isHidden = settings.launcherButtonAction == .hidden
+        buttonsStackView.addArrangedSubview(launcherButtonView)
 
         let runningApplicationsByBundleIdentifier: [String: NSRunningApplication] =
             NSWorkspace.shared.runningApplications.reduce(into: [:]) { result, application in
