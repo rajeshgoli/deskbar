@@ -30,9 +30,15 @@ struct TaskbarSettingsTests {
         #expect(settings.sessionManagerWidgetPinnedDisplayID == nil)
         #expect(settings.layoutMode == .fullWidth)
         #expect(settings.enableWindowSwitcher == false)
+        #expect(settings.disableSwitcherInFullScreen == false)
         #expect(settings.enableBareCommandLauncher == false)
         #expect(settings.appsLauncherShortcut == .controlOptionReturn)
         #expect(settings.animateSessionManagerActivity == false)
+        #expect(settings.showNowPlayingTitles)
+        #expect(settings.launcherButtonAction == .systemApps)
+        #expect(settings.launcherCustomAppBundleID == nil)
+        #expect(settings.launcherCustomAppPath == nil)
+        #expect(settings.launcherCustomCommand == "")
     }
 
     @Test
@@ -64,6 +70,7 @@ struct TaskbarSettingsTests {
         var settings = TaskbarSettings(defaults: defaults)
         settings.layoutMode = .fullWidthGlass
         settings.enableWindowSwitcher = false
+        settings.disableSwitcherInFullScreen = true
         settings.enableBareCommandLauncher = false
         settings.appsLauncherShortcut = .optionSpace
         settings.showSystemResourceWidget = false
@@ -79,6 +86,7 @@ struct TaskbarSettingsTests {
 
         #expect(settings.layoutMode == .fullWidthGlass)
         #expect(settings.enableWindowSwitcher == false)
+        #expect(settings.disableSwitcherInFullScreen)
         #expect(settings.enableBareCommandLauncher == false)
         #expect(settings.appsLauncherShortcut == .optionSpace)
         #expect(settings.showSystemResourceWidget == false)
@@ -96,6 +104,46 @@ struct TaskbarSettingsTests {
 
         #expect(settings.systemResourceWidgetPinnedDisplayID == nil)
         #expect(settings.sessionManagerWidgetPinnedDisplayID == nil)
+    }
+
+    @Test
+    func persistsNowPlayingAndLauncherButtonSettings() {
+        let suiteName = "TaskbarSettingsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+
+        defaults.removePersistentDomain(forName: suiteName)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        var settings = TaskbarSettings(defaults: defaults)
+        settings.showNowPlayingTitles = false
+        settings.launcherButtonAction = .customApp
+        settings.launcherCustomAppBundleID = "com.apple.Finder"
+        settings.launcherCustomAppPath = "/System/Library/CoreServices/Finder.app"
+        settings.launcherCustomCommand = "open https://example.com"
+
+        settings = TaskbarSettings(defaults: defaults)
+
+        #expect(settings.showNowPlayingTitles == false)
+        #expect(settings.launcherButtonAction == .customApp)
+        #expect(settings.launcherCustomAppBundleID == "com.apple.Finder")
+        #expect(settings.launcherCustomAppPath == "/System/Library/CoreServices/Finder.app")
+        #expect(settings.launcherCustomCommand == "open https://example.com")
+
+        settings.launcherButtonAction = .hidden
+        settings.launcherCustomAppBundleID = nil
+        settings.launcherCustomAppPath = nil
+        settings.launcherCustomCommand = ""
+        settings.showNowPlayingTitles = true
+
+        settings = TaskbarSettings(defaults: defaults)
+
+        #expect(settings.showNowPlayingTitles)
+        #expect(settings.launcherButtonAction == .hidden)
+        #expect(settings.launcherCustomAppBundleID == nil)
+        #expect(settings.launcherCustomAppPath == nil)
+        #expect(settings.launcherCustomCommand == "")
     }
 
     @Test

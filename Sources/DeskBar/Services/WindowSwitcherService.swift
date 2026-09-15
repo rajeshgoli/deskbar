@@ -44,6 +44,8 @@ final class WindowSwitcherService {
     private let settings: TaskbarSettings
     private let accessibilityService: AccessibilityService
     private let thumbnailService: ThumbnailService
+    private let switcherExclusionManager: SwitcherExclusionManager
+    private var switcherExclusionObserver: NSObjectProtocol?
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var overlayPanels: [CGDirectDisplayID: WindowSwitcherPanel] = [:]
@@ -58,17 +60,31 @@ final class WindowSwitcherService {
         windowManager: WindowManager,
         settings: TaskbarSettings,
         thumbnailService: ThumbnailService,
-        accessibilityService: AccessibilityService = AccessibilityService()
+        accessibilityService: AccessibilityService = AccessibilityService(),
+        switcherExclusionManager: SwitcherExclusionManager
     ) {
         self.windowManager = windowManager
         self.settings = settings
         self.thumbnailService = thumbnailService
         self.accessibilityService = accessibilityService
+        self.switcherExclusionManager = switcherExclusionManager
         bindSettings()
+        switcherExclusionObserver = NotificationCenter.default.addObserver(
+            forName: SwitcherExclusionManager.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.rebuildSessionForExclusionChange()
+            }
+        }
         updateForAccessibilityPermissionChange(isGranted: AXIsProcessTrusted())
     }
 
     deinit {
+        if let switcherExclusionObserver {
+            NotificationCenter.default.removeObserver(switcherExclusionObserver)
+        }
         stop()
     }
 
@@ -121,10 +137,12 @@ final class WindowSwitcherService {
 
     static func switchableWindows(
         from windows: [WindowInfo],
-        zOrderedWindowIDs: [CGWindowID]
+        zOrderedWindowIDs: [CGWindowID],
+        excludedBundleIDs: Set<String> = []
     ) -> [WindowInfo] {
         let candidates = windows.filter {
-            $0.cgWindowID != nil && !$0.isMinimized && !$0.isHidden
+            $0.cgWindowID != nil && !$0.isMinimized && !$0.isHidden &&
+                ($0.bundleIdentifier.map { !excludedBundleIDs.contains($0) } ?? true)
         }
         let windowsByCGID = Dictionary(
             preservingFirstValues: candidates.compactMap { window -> (CGWindowID, WindowInfo)? in
@@ -333,8 +351,9 @@ final class WindowSwitcherService {
             if settings.enableBareCommandLauncher,
                settings.appsLauncherShortcut == .commandTap,
                bareCommandDetector.handleFlagsChanged(flags) {
-                DispatchQueue.main.async {
-                    AppsLauncher.open()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    AppsLauncher.open(settings: self.settings)
                 }
             } else if !settings.enableBareCommandLauncher || settings.appsLauncherShortcut != .commandTap {
                 bareCommandDetector.cancel()
@@ -372,8 +391,9 @@ final class WindowSwitcherService {
                keyCode: keyCode,
                flags: flags
            ) {
-            DispatchQueue.main.async {
-                AppsLauncher.open()
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                AppsLauncher.open(settings: self.settings)
             }
             return nil
         }
@@ -383,6 +403,15 @@ final class WindowSwitcherService {
               flags.contains(.maskAlternate),
               !flags.contains(.maskCommand),
               !flags.contains(.maskControl) else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        if Self.shouldSuppressSwitcher(
+            frontmostBundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            excludedBundleIDs: switcherExclusionManager.excludedBundleIDs,
+            disableInFullScreen: settings.disableSwitcherInFullScreen,
+            frontmostIsFullScreen: settings.disableSwitcherInFullScreen && isFrontmostAppFullScreen()
+        ) {
             return Unmanaged.passUnretained(event)
         }
 
@@ -396,6 +425,33 @@ final class WindowSwitcherService {
         return nil
     }
 
+    /// Pure decision helper for switcher suppression. DeskBar ignores the
+    /// keypress (the frontmost app receives it) when the frontmost app opted
+    /// out via the exclusion list, or when fullscreen suppression is enabled
+    /// and the frontmost app owns a fullscreen window.
+    static func shouldSuppressSwitcher(
+        frontmostBundleID: String?,
+        excludedBundleIDs: Set<String>,
+        disableInFullScreen: Bool,
+        frontmostIsFullScreen: Bool
+    ) -> Bool {
+        if let frontmostBundleID, excludedBundleIDs.contains(frontmostBundleID) {
+            return true
+        }
+
+        return disableInFullScreen && frontmostIsFullScreen
+    }
+
+    private func isFrontmostAppFullScreen() -> Bool {
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else {
+            return false
+        }
+
+        return accessibilityService.enumerateWindows(for: frontmost).contains {
+            accessibilityService.isFullScreen(element: $0)
+        }
+    }
+
     @MainActor
     private func cycleWindow(reverse: Bool) {
         guard AXIsProcessTrusted() else {
@@ -406,7 +462,8 @@ final class WindowSwitcherService {
             windowManager.refresh()
             sessionWindows = Self.switchableWindows(
                 from: windowManager.windows,
-                zOrderedWindowIDs: Self.zOrderedWindowIDs()
+                zOrderedWindowIDs: Self.zOrderedWindowIDs(),
+                excludedBundleIDs: switcherExclusionManager.excludedBundleIDs
             )
             selectedIndex = nil
             thumbnailProvider = WindowSwitcherThumbnailProvider(thumbnailService: thumbnailService)
@@ -449,6 +506,29 @@ final class WindowSwitcherService {
         if let selectedWindow {
             activate(window: selectedWindow)
         }
+    }
+
+    @MainActor
+    private func rebuildSessionForExclusionChange() {
+        guard !sessionWindows.isEmpty else {
+            return
+        }
+
+        sessionWindows = Self.switchableWindows(
+            from: windowManager.windows,
+            zOrderedWindowIDs: Self.zOrderedWindowIDs(),
+            excludedBundleIDs: switcherExclusionManager.excludedBundleIDs
+        )
+
+        guard !sessionWindows.isEmpty else {
+            endSession(commitSelection: false)
+            return
+        }
+
+        if let selectedIndex, !sessionWindows.indices.contains(selectedIndex) {
+            self.selectedIndex = sessionWindows.count - 1
+        }
+        showOverlay()
     }
 
     @MainActor

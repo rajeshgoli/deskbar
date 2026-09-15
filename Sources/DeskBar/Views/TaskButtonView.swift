@@ -177,7 +177,10 @@ final class TaskButtonView: NSView, NSDraggingSource {
     private var runtimeState: AppRuntimeState
     private var showsActivityOverlay: Bool
     private var agentAnnotation: SMAgentWindowAnnotation?
+    private let nowPlayingService: NowPlayingService
+    private var nowPlayingSnapshot: NowPlayingSnapshot?
     private let blacklistManager: BlacklistManager
+    private let switcherExclusionManager: SwitcherExclusionManager
     private let activationHandler: (WindowInfo) -> Void
     private var pluginMenuConfiguration: TaskButtonPluginMenuConfiguration?
     private let dragConfiguration: TaskButtonDragConfiguration?
@@ -371,7 +374,9 @@ final class TaskButtonView: NSView, NSDraggingSource {
         agentAnnotation: SMAgentWindowAnnotation? = nil,
         settings: TaskbarSettings,
         blacklistManager: BlacklistManager,
+        switcherExclusionManager: SwitcherExclusionManager,
         accessibilityService: AccessibilityService = AccessibilityService(),
+        nowPlayingService: NowPlayingService = .shared,
         dragConfiguration: TaskButtonDragConfiguration? = nil,
         pluginMenuConfiguration: TaskButtonPluginMenuConfiguration? = nil,
         activationHandler: @escaping (WindowInfo) -> Void
@@ -389,9 +394,12 @@ final class TaskButtonView: NSView, NSDraggingSource {
         self.showsActivityOverlay = showsActivityOverlay
         self.agentAnnotation = agentAnnotation
         self.blacklistManager = blacklistManager
+        self.switcherExclusionManager = switcherExclusionManager
         self.hoverDelay = settings.hoverDelay
         self.maxWidth = settings.maxTaskWidth
         self.accessibilityService = accessibilityService
+        self.nowPlayingService = nowPlayingService
+        self.nowPlayingSnapshot = nowPlayingService.snapshot
         self.dragConfiguration = dragConfiguration
         self.pluginMenuConfiguration = pluginMenuConfiguration
         self.activationHandler = activationHandler
@@ -777,6 +785,23 @@ final class TaskButtonView: NSView, NSDraggingSource {
             .receive(on: RunLoop.main)
             .sink { _ in updateForSessionManagerSettings() }
             .store(in: &cancellables)
+
+        settings.$showNowPlayingTitles
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateAppearance()
+                self?.updateWidthConstraint()
+            }
+            .store(in: &cancellables)
+
+        nowPlayingService.$snapshot
+            .receive(on: RunLoop.main)
+            .sink { [weak self] snapshot in
+                self?.nowPlayingSnapshot = snapshot
+                self?.updateAppearance()
+                self?.updateWidthConstraint()
+            }
+            .store(in: &cancellables)
     }
 
     private func resolvedTitle() -> String {
@@ -789,9 +814,20 @@ final class TaskButtonView: NSView, NSDraggingSource {
             }
         }
 
+        if settings.showNowPlayingTitles,
+           let nowPlayingSnapshot,
+           nowPlayingSnapshot.matches(windowBundleIdentifier: windowInfo.bundleIdentifier) {
+            return nowPlayingSnapshot.displayString
+        }
+
         let windowTitle = windowInfo.title
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return windowTitle.isEmpty ? windowInfo.appName : windowTitle
+    }
+
+    /// Test hook exposing the resolved (pre-decoration) title.
+    func resolvedTitleForTesting() -> String {
+        resolvedTitle()
     }
 
     private func displayTitle() -> String {
@@ -832,6 +868,15 @@ final class TaskButtonView: NSView, NSDraggingSource {
             let rawTitle = windowInfo.title.trimmingCharacters(in: .whitespacesAndNewlines)
             if !rawTitle.isEmpty, rawTitle != agentAnnotation.friendlyName {
                 lines.append("Terminal: \(rawTitle)")
+            }
+        }
+
+        if settings.showNowPlayingTitles,
+           let nowPlayingSnapshot,
+           nowPlayingSnapshot.matches(windowBundleIdentifier: windowInfo.bundleIdentifier) {
+            let rawTitle = windowInfo.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !rawTitle.isEmpty {
+                lines.append("Window: \(rawTitle)")
             }
         }
 
@@ -1024,6 +1069,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         menu.addItem(.separator())
         menu.addItem(makePinToLauncherMenuItem())
         menu.addItem(makeBlacklistMenuItem())
+        menu.addItem(makeSwitcherExclusionMenuItem())
 
         menu.addItem(.separator())
         menu.addItem(makeMenuItem(title: "Quit", action: #selector(quitApplication(_:))))
@@ -1082,6 +1128,16 @@ final class TaskButtonView: NSView, NSDraggingSource {
         let item = makeMenuItem(title: "Add to Blacklist", action: #selector(addToBlacklist(_:)))
         if let bundleIdentifier = windowInfo.bundleIdentifier {
             item.isEnabled = !blacklistManager.isBlacklisted(bundleIdentifier: bundleIdentifier)
+        } else {
+            item.isEnabled = false
+        }
+        return item
+    }
+
+    private func makeSwitcherExclusionMenuItem() -> NSMenuItem {
+        let item = makeMenuItem(title: "Exclude from Switcher", action: #selector(excludeFromSwitcher(_:)))
+        if let bundleIdentifier = windowInfo.bundleIdentifier {
+            item.isEnabled = !switcherExclusionManager.isExcluded(bundleIdentifier: bundleIdentifier)
         } else {
             item.isEnabled = false
         }
@@ -1312,6 +1368,15 @@ final class TaskButtonView: NSView, NSDraggingSource {
         }
 
         blacklistManager.add(bundleIdentifier: bundleIdentifier)
+    }
+
+    @objc
+    private func excludeFromSwitcher(_ sender: Any?) {
+        guard let bundleIdentifier = windowInfo.bundleIdentifier else {
+            return
+        }
+
+        switcherExclusionManager.add(bundleIdentifier: bundleIdentifier)
     }
 
     private func textColor() -> NSColor {

@@ -4,6 +4,7 @@ class SettingsWindowController: NSWindowController {
     convenience init(
         settings: TaskbarSettings,
         blacklistManager: BlacklistManager,
+        switcherExclusionManager: SwitcherExclusionManager,
         pinnedAppManager: PinnedAppManager
     ) {
         let window = NSWindow(
@@ -19,7 +20,8 @@ class SettingsWindowController: NSWindowController {
         let settingsView = SettingsView(
             settings: settings,
             pinnedAppManager: pinnedAppManager,
-            blacklistManager: blacklistManager
+            blacklistManager: blacklistManager,
+            switcherExclusionManager: switcherExclusionManager
         )
         window.contentView = settingsView
     }

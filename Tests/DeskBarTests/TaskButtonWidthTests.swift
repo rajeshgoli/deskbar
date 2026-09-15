@@ -100,6 +100,7 @@ struct TaskButtonWidthTests {
             showsActivityOverlay: false,
             settings: settings,
             blacklistManager: BlacklistManager(),
+            switcherExclusionManager: SwitcherExclusionManager(),
             pluginMenuConfiguration: menuConfiguration,
             activationHandler: { _ in }
         )
@@ -148,6 +149,7 @@ struct TaskButtonWidthTests {
             showsActivityOverlay: false,
             settings: settings,
             blacklistManager: BlacklistManager(),
+            switcherExclusionManager: SwitcherExclusionManager(),
             pluginMenuConfiguration: menuConfiguration,
             activationHandler: { _ in }
         )

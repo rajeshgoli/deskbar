@@ -1,23 +1,30 @@
 import AppKit
+import Combine
 
 final class AppsLauncherButtonView: NSView {
+    private let settings: TaskbarSettings
+    private let openSettingsHandler: (() -> Void)?
     private let iconView = NSImageView()
     private var trackingAreaRef: NSTrackingArea?
+    private var cancellables = Set<AnyCancellable>()
     private var isHovered = false {
         didSet {
             updateBackgroundColor()
         }
     }
 
-    init() {
+    init(settings: TaskbarSettings, openSettingsHandler: (() -> Void)? = nil) {
+        self.settings = settings
+        self.openSettingsHandler = openSettingsHandler
         super.init(frame: .zero)
 
         translatesAutoresizingMaskIntoConstraints = false
         wantsLayer = true
         layer?.cornerRadius = 8
-        toolTip = "Apps"
 
         configureSubviews()
+        bindSettings()
+        refreshTarget()
         updateBackgroundColor()
     }
 
@@ -75,7 +82,6 @@ final class AppsLauncherButtonView: NSView {
         iconView.translatesAutoresizingMaskIntoConstraints = false
         iconView.wantsLayer = true
         iconView.imageScaling = .scaleProportionallyUpOrDown
-        iconView.image = launcherIcon()
 
         addSubview(iconView)
 
@@ -90,25 +96,62 @@ final class AppsLauncherButtonView: NSView {
         ])
     }
 
-    private func openAppsLauncher() {
-        AppsLauncher.open()
+    private func bindSettings() {
+        let refresh: () -> Void = { [weak self] in self?.refreshTarget() }
+        settings.$launcherButtonAction
+            .receive(on: RunLoop.main)
+            .sink { _ in refresh() }
+            .store(in: &cancellables)
+        settings.$launcherCustomAppBundleID
+            .receive(on: RunLoop.main)
+            .sink { _ in refresh() }
+            .store(in: &cancellables)
+        settings.$launcherCustomAppPath
+            .receive(on: RunLoop.main)
+            .sink { _ in refresh() }
+            .store(in: &cancellables)
+        settings.$launcherCustomCommand
+            .receive(on: RunLoop.main)
+            .sink { _ in refresh() }
+            .store(in: &cancellables)
     }
 
-    private func launcherIcon() -> NSImage? {
-        AppsLauncher.icon()
+    private func refreshTarget() {
+        let target = AppsLauncher.resolve(settings: settings)
+        iconView.image = target.icon
+        toolTip = target.tooltip
+    }
+
+    private func openAppsLauncher() {
+        AppsLauncher.open(settings: settings)
     }
 
     private func showContextMenu(with event: NSEvent) {
+        let target = AppsLauncher.resolve(settings: settings)
         let menu = NSMenu()
-        let openItem = NSMenuItem(title: "Open Apps", action: #selector(openAppsFromMenu(_:)), keyEquivalent: "")
+        let openItem = NSMenuItem(title: "Open \(target.name)", action: #selector(openAppsFromMenu(_:)), keyEquivalent: "")
         openItem.target = self
         menu.addItem(openItem)
+        if openSettingsHandler != nil {
+            let configureItem = NSMenuItem(
+                title: "Configure Launcher Button…",
+                action: #selector(openLauncherSettings(_:)),
+                keyEquivalent: ""
+            )
+            configureItem.target = self
+            menu.addItem(configureItem)
+        }
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 
     @objc
     private func openAppsFromMenu(_ sender: Any?) {
         openAppsLauncher()
+    }
+
+    @objc
+    private func openLauncherSettings(_ sender: Any?) {
+        openSettingsHandler?()
     }
 
     private func updateBackgroundColor() {

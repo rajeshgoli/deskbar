@@ -13,6 +13,7 @@ final class TaskbarContentView: NSView {
     private let permissionsManager: PermissionsManager
     private let settings: TaskbarSettings
     private let blacklistManager: BlacklistManager
+    private let switcherExclusionManager: SwitcherExclusionManager
     private let displayID: CGDirectDisplayID
     private let launcherZoneView: LauncherZoneView
     private let sessionManagerWidgetView: SessionManagerWidgetView?
@@ -82,6 +83,7 @@ final class TaskbarContentView: NSView {
         permissionsManager: PermissionsManager,
         settings: TaskbarSettings,
         blacklistManager: BlacklistManager,
+        switcherExclusionManager: SwitcherExclusionManager,
         pinnedAppManager: PinnedAppManager,
         systemResourceMonitor: SystemResourceMonitor,
         thumbnailService: ThumbnailService? = nil,
@@ -95,6 +97,7 @@ final class TaskbarContentView: NSView {
         self.permissionsManager = permissionsManager
         self.settings = settings
         self.blacklistManager = blacklistManager
+        self.switcherExclusionManager = switcherExclusionManager
         self.pinnedAppManager = pinnedAppManager
         self.thumbnailService = thumbnailService
         self.displayID = displayID
@@ -103,7 +106,8 @@ final class TaskbarContentView: NSView {
             settings: settings,
             pinnedAppManager: pinnedAppManager,
             windowManager: windowManager,
-            displayID: displayID
+            displayID: displayID,
+            openSettingsHandler: openSettingsHandler
         )
         systemResourceWidgetView = SystemResourceWidgetView(
             settings: settings,
@@ -873,6 +877,7 @@ final class TaskbarContentView: NSView {
             agentAnnotation: smAnnotation(for: window),
             settings: settings,
             blacklistManager: blacklistManager,
+            switcherExclusionManager: switcherExclusionManager,
             dragConfiguration: dragItemID.flatMap { [self] in
                 makeTaskDragConfiguration(for: $0)
             },
@@ -937,6 +942,7 @@ final class TaskbarContentView: NSView {
                 showsActivityOverlay: settings.enableActivityMode && isActivityModeActive,
                 settings: settings,
                 blacklistManager: blacklistManager,
+                switcherExclusionManager: switcherExclusionManager,
                 dragConfiguration: makeTaskDragConfiguration(for: groupedTaskItemID(forGroupID: group.id)),
                 badgeProvider: { [weak self] bundleIdentifier in
                     self?.hasBadge(for: bundleIdentifier) ?? false
@@ -2844,6 +2850,7 @@ private final class TaskZoneGroupButtonView: NSView, NSDraggingSource {
 private final class TaskZoneGroupContainerView: NSView {
     private let settings: TaskbarSettings
     private let blacklistManager: BlacklistManager
+    private let switcherExclusionManager: SwitcherExclusionManager
     private let badgeProvider: (String?) -> Bool
     private let agentAnnotationProvider: (WindowInfo) -> SMAgentWindowAnnotation?
     private let pluginMenuConfigurationProvider: (WindowInfo) -> TaskButtonPluginMenuConfiguration?
@@ -2864,6 +2871,7 @@ private final class TaskZoneGroupContainerView: NSView {
         showsActivityOverlay: Bool,
         settings: TaskbarSettings,
         blacklistManager: BlacklistManager,
+        switcherExclusionManager: SwitcherExclusionManager,
         dragConfiguration: TaskButtonDragConfiguration,
         badgeProvider: @escaping (String?) -> Bool,
         runtimeStateProvider: @escaping (pid_t) -> AppRuntimeState,
@@ -2875,6 +2883,7 @@ private final class TaskZoneGroupContainerView: NSView {
     ) {
         self.settings = settings
         self.blacklistManager = blacklistManager
+        self.switcherExclusionManager = switcherExclusionManager
         self.badgeProvider = badgeProvider
         self.agentAnnotationProvider = agentAnnotationProvider
         self.pluginMenuConfigurationProvider = pluginMenuConfigurationProvider
@@ -3005,6 +3014,7 @@ private final class TaskZoneGroupContainerView: NSView {
                         agentAnnotation: agentAnnotationProvider(window),
                         settings: settings,
                         blacklistManager: blacklistManager,
+                        switcherExclusionManager: switcherExclusionManager,
                         pluginMenuConfiguration: pluginMenuConfigurationProvider(window)
                     ) { [windowActivationHandler] windowInfo in
                         windowActivationHandler(windowInfo)
