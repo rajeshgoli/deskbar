@@ -103,7 +103,8 @@ final class TaskbarContentView: NSView {
             settings: settings,
             pinnedAppManager: pinnedAppManager,
             windowManager: windowManager,
-            displayID: displayID
+            displayID: displayID,
+            openSettingsHandler: openSettingsHandler
         )
         systemResourceWidgetView = SystemResourceWidgetView(
             settings: settings,
