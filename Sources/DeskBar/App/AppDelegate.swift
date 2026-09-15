@@ -103,6 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         configureStatusItem()
         bindDockMode(settings: settings)
+        bindNowPlaying(settings: settings)
         bindSessionManagerPlugin(settings: settings, smPluginService: smPluginService)
         configureSignalHandlers()
     }
@@ -112,6 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NotificationCenter.default.removeObserver(screenObserver)
         }
 
+        NowPlayingService.shared.stop()
         let workspaceCenter = NSWorkspace.shared.notificationCenter
         workspaceObservers.forEach(workspaceCenter.removeObserver)
         dockManager?.restoreDockState()
@@ -145,6 +147,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] mode in
                 self?.dockManager?.apply(mode: mode)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func bindNowPlaying(settings: TaskbarSettings) {
+        if settings.showNowPlayingTitles {
+            NowPlayingService.shared.start()
+        }
+
+        settings.$showNowPlayingTitles
+            .dropFirst()
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { showTitles in
+                if showTitles {
+                    NowPlayingService.shared.start()
+                } else {
+                    NowPlayingService.shared.stop()
+                }
             }
             .store(in: &cancellables)
     }

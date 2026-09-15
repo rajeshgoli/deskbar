@@ -67,6 +67,9 @@ final class NowPlayingService: ObservableObject {
     static let musicBundleIdentifier = "com.apple.Music"
     static let spotifyBundleIdentifier = "com.spotify.client"
 
+    /// App-wide shared instance observed by task buttons.
+    static let shared = NowPlayingService()
+
     /// Field order for script output: title, artist, album, appName, bundleID.
     static func parseScriptOutput(_ output: String) -> (title: String, artist: String, album: String, appName: String, bundleID: String?)? {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -115,6 +118,11 @@ final class NowPlayingService: ObservableObject {
                 self?.snapshot = snapshot
             }
         }
+    }
+
+    /// Test-only publisher bypass (`snapshot` setter is private).
+    func publishSnapshotForTesting(_ snapshot: NowPlayingSnapshot?) {
+        self.snapshot = snapshot
     }
 
     // MARK: - Query pipeline

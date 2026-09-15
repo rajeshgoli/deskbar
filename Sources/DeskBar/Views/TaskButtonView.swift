@@ -177,6 +177,8 @@ final class TaskButtonView: NSView, NSDraggingSource {
     private var runtimeState: AppRuntimeState
     private var showsActivityOverlay: Bool
     private var agentAnnotation: SMAgentWindowAnnotation?
+    private let nowPlayingService: NowPlayingService
+    private var nowPlayingSnapshot: NowPlayingSnapshot?
     private let blacklistManager: BlacklistManager
     private let activationHandler: (WindowInfo) -> Void
     private var pluginMenuConfiguration: TaskButtonPluginMenuConfiguration?
@@ -372,6 +374,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         settings: TaskbarSettings,
         blacklistManager: BlacklistManager,
         accessibilityService: AccessibilityService = AccessibilityService(),
+        nowPlayingService: NowPlayingService = .shared,
         dragConfiguration: TaskButtonDragConfiguration? = nil,
         pluginMenuConfiguration: TaskButtonPluginMenuConfiguration? = nil,
         activationHandler: @escaping (WindowInfo) -> Void
@@ -392,6 +395,8 @@ final class TaskButtonView: NSView, NSDraggingSource {
         self.hoverDelay = settings.hoverDelay
         self.maxWidth = settings.maxTaskWidth
         self.accessibilityService = accessibilityService
+        self.nowPlayingService = nowPlayingService
+        self.nowPlayingSnapshot = nowPlayingService.snapshot
         self.dragConfiguration = dragConfiguration
         self.pluginMenuConfiguration = pluginMenuConfiguration
         self.activationHandler = activationHandler
@@ -777,6 +782,23 @@ final class TaskButtonView: NSView, NSDraggingSource {
             .receive(on: RunLoop.main)
             .sink { _ in updateForSessionManagerSettings() }
             .store(in: &cancellables)
+
+        settings.$showNowPlayingTitles
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateAppearance()
+                self?.updateWidthConstraint()
+            }
+            .store(in: &cancellables)
+
+        nowPlayingService.$snapshot
+            .receive(on: RunLoop.main)
+            .sink { [weak self] snapshot in
+                self?.nowPlayingSnapshot = snapshot
+                self?.updateAppearance()
+                self?.updateWidthConstraint()
+            }
+            .store(in: &cancellables)
     }
 
     private func resolvedTitle() -> String {
@@ -789,9 +811,20 @@ final class TaskButtonView: NSView, NSDraggingSource {
             }
         }
 
+        if settings.showNowPlayingTitles,
+           let nowPlayingSnapshot,
+           nowPlayingSnapshot.matches(windowBundleIdentifier: windowInfo.bundleIdentifier) {
+            return nowPlayingSnapshot.displayString
+        }
+
         let windowTitle = windowInfo.title
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return windowTitle.isEmpty ? windowInfo.appName : windowTitle
+    }
+
+    /// Test hook exposing the resolved (pre-decoration) title.
+    func resolvedTitleForTesting() -> String {
+        resolvedTitle()
     }
 
     private func displayTitle() -> String {
@@ -832,6 +865,15 @@ final class TaskButtonView: NSView, NSDraggingSource {
             let rawTitle = windowInfo.title.trimmingCharacters(in: .whitespacesAndNewlines)
             if !rawTitle.isEmpty, rawTitle != agentAnnotation.friendlyName {
                 lines.append("Terminal: \(rawTitle)")
+            }
+        }
+
+        if settings.showNowPlayingTitles,
+           let nowPlayingSnapshot,
+           nowPlayingSnapshot.matches(windowBundleIdentifier: windowInfo.bundleIdentifier) {
+            let rawTitle = windowInfo.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !rawTitle.isEmpty {
+                lines.append("Window: \(rawTitle)")
             }
         }
 
