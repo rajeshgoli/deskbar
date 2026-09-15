@@ -178,6 +178,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
     private var showsActivityOverlay: Bool
     private var agentAnnotation: SMAgentWindowAnnotation?
     private let blacklistManager: BlacklistManager
+    private let switcherExclusionManager: SwitcherExclusionManager
     private let activationHandler: (WindowInfo) -> Void
     private var pluginMenuConfiguration: TaskButtonPluginMenuConfiguration?
     private let dragConfiguration: TaskButtonDragConfiguration?
@@ -371,6 +372,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         agentAnnotation: SMAgentWindowAnnotation? = nil,
         settings: TaskbarSettings,
         blacklistManager: BlacklistManager,
+        switcherExclusionManager: SwitcherExclusionManager,
         accessibilityService: AccessibilityService = AccessibilityService(),
         dragConfiguration: TaskButtonDragConfiguration? = nil,
         pluginMenuConfiguration: TaskButtonPluginMenuConfiguration? = nil,
@@ -389,6 +391,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         self.showsActivityOverlay = showsActivityOverlay
         self.agentAnnotation = agentAnnotation
         self.blacklistManager = blacklistManager
+        self.switcherExclusionManager = switcherExclusionManager
         self.hoverDelay = settings.hoverDelay
         self.maxWidth = settings.maxTaskWidth
         self.accessibilityService = accessibilityService
@@ -1024,6 +1027,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         menu.addItem(.separator())
         menu.addItem(makePinToLauncherMenuItem())
         menu.addItem(makeBlacklistMenuItem())
+        menu.addItem(makeSwitcherExclusionMenuItem())
 
         menu.addItem(.separator())
         menu.addItem(makeMenuItem(title: "Quit", action: #selector(quitApplication(_:))))
@@ -1082,6 +1086,16 @@ final class TaskButtonView: NSView, NSDraggingSource {
         let item = makeMenuItem(title: "Add to Blacklist", action: #selector(addToBlacklist(_:)))
         if let bundleIdentifier = windowInfo.bundleIdentifier {
             item.isEnabled = !blacklistManager.isBlacklisted(bundleIdentifier: bundleIdentifier)
+        } else {
+            item.isEnabled = false
+        }
+        return item
+    }
+
+    private func makeSwitcherExclusionMenuItem() -> NSMenuItem {
+        let item = makeMenuItem(title: "Exclude from Switcher", action: #selector(excludeFromSwitcher(_:)))
+        if let bundleIdentifier = windowInfo.bundleIdentifier {
+            item.isEnabled = !switcherExclusionManager.isExcluded(bundleIdentifier: bundleIdentifier)
         } else {
             item.isEnabled = false
         }
@@ -1312,6 +1326,15 @@ final class TaskButtonView: NSView, NSDraggingSource {
         }
 
         blacklistManager.add(bundleIdentifier: bundleIdentifier)
+    }
+
+    @objc
+    private func excludeFromSwitcher(_ sender: Any?) {
+        guard let bundleIdentifier = windowInfo.bundleIdentifier else {
+            return
+        }
+
+        switcherExclusionManager.add(bundleIdentifier: bundleIdentifier)
     }
 
     private func textColor() -> NSColor {

@@ -146,6 +146,41 @@ func switchableWindowsExcludeHiddenMinimizedAndProvisionalWindows() {
 }
 
 @Test
+func switchableWindowsExcludeSwitcherExcludedBundleIDs() {
+    let moonlight = window(pid: 1, cgWindowID: 10, title: "Moonlight")
+    let safari = window(pid: 2, cgWindowID: 20, title: "Safari")
+
+    let result = WindowSwitcherService.switchableWindows(
+        from: [moonlight, safari],
+        zOrderedWindowIDs: [10, 20],
+        excludedBundleIDs: ["com.example.app1"]
+    )
+
+    #expect(result.map(\.id) == [safari.id])
+}
+
+@Test
+func switchableWindowsKeepWindowsWithoutBundleIdentifier() {
+    let untracked = WindowInfo(
+        pid: 3,
+        cgWindowID: 30,
+        appName: "Untracked",
+        title: "Untracked",
+        icon: nil,
+        bundleIdentifier: nil
+    )
+    let excluded = window(pid: 1, cgWindowID: 10, title: "Excluded")
+
+    let result = WindowSwitcherService.switchableWindows(
+        from: [untracked, excluded],
+        zOrderedWindowIDs: [10, 30],
+        excludedBundleIDs: ["com.example.app1"]
+    )
+
+    #expect(result.map(\.id) == [untracked.id])
+}
+
+@Test
 func nextSelectionStartsAfterCurrentWindow() {
     let ids = ["one", "two", "three"]
 

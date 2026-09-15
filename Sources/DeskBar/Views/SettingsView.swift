@@ -19,11 +19,17 @@ final class SettingsView: NSView {
         static let bundleIdentifier = NSUserInterfaceItemIdentifier("blacklistBundleIdentifier")
     }
 
+    private enum SwitcherExclusionColumn {
+        static let app = NSUserInterfaceItemIdentifier("switcherExclusionApp")
+        static let bundleIdentifier = NSUserInterfaceItemIdentifier("switcherExclusionBundleIdentifier")
+    }
+
     private static let launcherPasteboardType = NSPasteboard.PasteboardType("com.deskbar.pinned-app-row")
 
     private let settings: TaskbarSettings
     private let pinnedAppManager: PinnedAppManager
     private let blacklistManager: BlacklistManager
+    private let switcherExclusionManager: SwitcherExclusionManager
     private let tabView = NSTabView()
 
     private let startAtLoginCheckbox = NSButton(checkboxWithTitle: "Start at login", target: nil, action: nil)
@@ -70,9 +76,15 @@ final class SettingsView: NSView {
     private let blacklistScrollView = NSScrollView()
     private let removeBlacklistButton = NSButton(title: "Remove", target: nil, action: nil)
     private let addBlacklistButton = NSButton(title: "Add...", target: nil, action: nil)
+    private let switcherExclusionTableView = NSTableView()
+    private let switcherExclusionScrollView = NSScrollView()
+    private let removeSwitcherExclusionButton = NSButton(title: "Remove", target: nil, action: nil)
+    private let addSwitcherExclusionButton = NSButton(title: "Add...", target: nil, action: nil)
 
     private var blacklistEntries: [AppEntry] = []
     private var addSheetEntries: [AppEntry] = []
+    private var switcherExcludedEntries: [AppEntry] = []
+    private var switcherAddSheetEntries: [AppEntry] = []
     private var widgetDisplayOptions: [CGDirectDisplayID?] = []
     private var sessionManagerWidgetDisplayOptions: [CGDirectDisplayID?] = []
     private var cancellables = Set<AnyCancellable>()
@@ -80,11 +92,13 @@ final class SettingsView: NSView {
     init(
         settings: TaskbarSettings,
         pinnedAppManager: PinnedAppManager = PinnedAppManager(),
-        blacklistManager: BlacklistManager
+        blacklistManager: BlacklistManager,
+        switcherExclusionManager: SwitcherExclusionManager
     ) {
         self.settings = settings
         self.pinnedAppManager = pinnedAppManager
         self.blacklistManager = blacklistManager
+        self.switcherExclusionManager = switcherExclusionManager
         super.init(frame: .zero)
 
         configureLayout()
@@ -92,6 +106,7 @@ final class SettingsView: NSView {
         bindSettings()
         bindPinnedApps()
         bindBlacklist()
+        bindSwitcherExclusion()
     }
 
     @available(*, unavailable)
@@ -117,6 +132,7 @@ final class SettingsView: NSView {
         configureSessionManagerWidgetDisplayPopupButton()
         configureLauncherTableView()
         configureBlacklistTableView()
+        configureSwitcherExclusionTableView()
 
         let generalTab = NSTabViewItem(identifier: "general")
         generalTab.label = "General"
@@ -187,7 +203,11 @@ final class SettingsView: NSView {
         blacklistTab.label = "Blacklist"
         blacklistTab.view = makeBlacklistView()
 
-        [generalTab, appearanceTab, behaviorTab, widgetsTab, pluginsTab, launcherTab, blacklistTab].forEach(tabView.addTabViewItem)
+        let switcherTab = NSTabViewItem(identifier: "switcher")
+        switcherTab.label = "Switcher"
+        switcherTab.view = makeSwitcherExclusionView()
+
+        [generalTab, appearanceTab, behaviorTab, widgetsTab, pluginsTab, launcherTab, blacklistTab, switcherTab].forEach(tabView.addTabViewItem)
     }
 
     private func configureWidgetDisplayPopupButton() {
@@ -298,6 +318,31 @@ final class SettingsView: NSView {
         blacklistScrollView.borderType = .bezelBorder
         blacklistScrollView.hasVerticalScroller = true
         blacklistScrollView.documentView = blacklistTableView
+    }
+
+    private func configureSwitcherExclusionTableView() {
+        let appColumn = NSTableColumn(identifier: SwitcherExclusionColumn.app)
+        appColumn.title = "App"
+        appColumn.width = 240
+
+        let bundleIdentifierColumn = NSTableColumn(identifier: SwitcherExclusionColumn.bundleIdentifier)
+        bundleIdentifierColumn.title = "Bundle ID"
+        bundleIdentifierColumn.width = 300
+
+        switcherExclusionTableView.addTableColumn(appColumn)
+        switcherExclusionTableView.addTableColumn(bundleIdentifierColumn)
+        switcherExclusionTableView.headerView = NSTableHeaderView()
+        switcherExclusionTableView.usesAlternatingRowBackgroundColors = true
+        switcherExclusionTableView.allowsMultipleSelection = false
+        switcherExclusionTableView.allowsEmptySelection = true
+        switcherExclusionTableView.rowHeight = 36
+        switcherExclusionTableView.delegate = self
+        switcherExclusionTableView.dataSource = self
+
+        switcherExclusionScrollView.translatesAutoresizingMaskIntoConstraints = false
+        switcherExclusionScrollView.borderType = .bezelBorder
+        switcherExclusionScrollView.hasVerticalScroller = true
+        switcherExclusionScrollView.documentView = switcherExclusionTableView
     }
 
     private func configureActions() {
@@ -411,6 +456,12 @@ final class SettingsView: NSView {
 
         addBlacklistButton.target = self
         addBlacklistButton.action = #selector(showAddBlacklistSheet(_:))
+
+        removeSwitcherExclusionButton.target = self
+        removeSwitcherExclusionButton.action = #selector(removeSwitcherExclusionEntry(_:))
+
+        addSwitcherExclusionButton.target = self
+        addSwitcherExclusionButton.action = #selector(showAddSwitcherExclusionSheet(_:))
     }
 
     private func bindSettings() {
@@ -739,6 +790,17 @@ final class SettingsView: NSView {
         reloadBlacklistEntries()
     }
 
+    private func bindSwitcherExclusion() {
+        switcherExclusionManager.$excludedBundleIDs
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.reloadSwitcherExclusionEntries()
+            }
+            .store(in: &cancellables)
+
+        reloadSwitcherExclusionEntries()
+    }
+
     private func makeFormView(rows: [NSView]) -> NSView {
         let container = NSView()
         let stackView = NSStackView(views: rows)
@@ -872,6 +934,52 @@ final class SettingsView: NSView {
         return container
     }
 
+    private func makeSwitcherExclusionView() -> NSView {
+        let container = NSView()
+        let descriptionLabel = NSTextField(labelWithString: "Excluded apps stay on the taskbar but are skipped in the Option-Tab window switcher.")
+        descriptionLabel.textColor = .secondaryLabelColor
+        descriptionLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let buttonRow = NSStackView()
+        buttonRow.orientation = .horizontal
+        buttonRow.alignment = .centerY
+        buttonRow.spacing = 8
+        buttonRow.translatesAutoresizingMaskIntoConstraints = false
+        buttonRow.addArrangedSubview(removeSwitcherExclusionButton)
+
+        let spacer = NSView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        buttonRow.addArrangedSubview(spacer)
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        buttonRow.addArrangedSubview(addSwitcherExclusionButton)
+
+        removeSwitcherExclusionButton.isEnabled = false
+
+        container.addSubview(descriptionLabel)
+        container.addSubview(switcherExclusionScrollView)
+        container.addSubview(buttonRow)
+
+        NSLayoutConstraint.activate([
+            descriptionLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            descriptionLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            descriptionLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 20),
+
+            switcherExclusionScrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            switcherExclusionScrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            switcherExclusionScrollView.topAnchor.constraint(equalTo: descriptionLabel.bottomAnchor, constant: 12),
+            switcherExclusionScrollView.bottomAnchor.constraint(equalTo: buttonRow.topAnchor, constant: -12),
+            switcherExclusionScrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 240),
+
+            buttonRow.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
+            buttonRow.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            buttonRow.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor, constant: -20)
+        ])
+
+        return container
+    }
+
     private func makePlaceholderView(text: String) -> NSView {
         let container = NSView()
         let label = NSTextField(labelWithString: text)
@@ -980,6 +1088,11 @@ final class SettingsView: NSView {
         removeBlacklistButton.isEnabled = blacklistEntries.indices.contains(selectedRow)
     }
 
+    private func updateSwitcherExclusionButtonState() {
+        let selectedRow = switcherExclusionTableView.selectedRow
+        removeSwitcherExclusionButton.isEnabled = switcherExcludedEntries.indices.contains(selectedRow)
+    }
+
     private func updateWidgetControlsState() {
         let isEnabled = settings.showSystemResourceWidget
         systemResourceWidgetDisplayPopupButton.isEnabled = isEnabled
@@ -1046,6 +1159,29 @@ final class SettingsView: NSView {
         }
 
         updateBlacklistButtonState()
+    }
+
+    private func reloadSwitcherExclusionEntries() {
+        switcherExcludedEntries = switcherExclusionManager.excludedBundleIDs
+            .map(resolveAppEntry(bundleIdentifier:))
+            .sorted { lhs, rhs in
+                let nameComparison = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
+                if nameComparison != .orderedSame {
+                    return nameComparison == .orderedAscending
+                }
+
+                return lhs.bundleIdentifier.localizedCaseInsensitiveCompare(rhs.bundleIdentifier) == .orderedAscending
+            }
+
+        switcherExclusionTableView.reloadData()
+
+        if switcherExcludedEntries.isEmpty {
+            switcherExclusionTableView.deselectAll(nil)
+        } else if !switcherExcludedEntries.indices.contains(switcherExclusionTableView.selectedRow) {
+            switcherExclusionTableView.selectRowIndexes(IndexSet(integer: switcherExcludedEntries.count - 1), byExtendingSelection: false)
+        }
+
+        updateSwitcherExclusionButtonState()
     }
 
     private func resolveAppEntry(bundleIdentifier: String) -> AppEntry {
@@ -1168,6 +1304,100 @@ final class SettingsView: NSView {
 
         if alert.runModal() == .alertFirstButtonReturn, entries.indices.contains(tableView.selectedRow) {
             blacklistManager.add(bundleIdentifier: entries[tableView.selectedRow].bundleIdentifier)
+        }
+    }
+
+    private func runningAppEntriesForSwitcher() -> [AppEntry] {
+        let applicationsByBundleIdentifier = Dictionary(
+            NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .regular }
+                .compactMap { application -> (String, NSRunningApplication)? in
+                    guard let bundleIdentifier = application.bundleIdentifier else {
+                        return nil
+                    }
+
+                    return (bundleIdentifier, application)
+                },
+            uniquingKeysWith: { existing, _ in existing }
+        )
+
+        return applicationsByBundleIdentifier.values
+            .filter { application in
+                guard let bundleIdentifier = application.bundleIdentifier else {
+                    return false
+                }
+
+                return !switcherExclusionManager.isExcluded(bundleIdentifier: bundleIdentifier)
+            }
+            .map { application in
+                AppEntry(
+                    displayName: application.localizedName ?? application.bundleIdentifier ?? "",
+                    bundleIdentifier: application.bundleIdentifier ?? "",
+                    icon: application.icon
+                )
+            }
+            .sorted { lhs, rhs in
+                let nameComparison = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
+                if nameComparison != .orderedSame {
+                    return nameComparison == .orderedAscending
+                }
+
+                return lhs.bundleIdentifier.localizedCaseInsensitiveCompare(rhs.bundleIdentifier) == .orderedAscending
+            }
+    }
+
+    private func showRunningAppsSelectionForSwitcher(entries: [AppEntry]) {
+        let alert = NSAlert()
+        alert.messageText = "Exclude App from Switcher"
+        alert.informativeText = "Select a currently running app to skip in the Option-Tab window switcher."
+        alert.addButton(withTitle: "Exclude")
+        alert.addButton(withTitle: "Cancel")
+
+        let tableView = NSTableView()
+        tableView.delegate = self
+        tableView.dataSource = self
+        tableView.identifier = NSUserInterfaceItemIdentifier("switcherRunningAppsTable")
+        tableView.rowHeight = 36
+        tableView.usesAlternatingRowBackgroundColors = true
+        tableView.allowsEmptySelection = false
+
+        let appColumn = NSTableColumn(identifier: SwitcherExclusionColumn.app)
+        appColumn.title = "App"
+        appColumn.width = 220
+
+        let bundleIdentifierColumn = NSTableColumn(identifier: SwitcherExclusionColumn.bundleIdentifier)
+        bundleIdentifierColumn.title = "Bundle ID"
+        bundleIdentifierColumn.width = 250
+
+        tableView.addTableColumn(appColumn)
+        tableView.addTableColumn(bundleIdentifierColumn)
+
+        switcherAddSheetEntries = entries
+
+        let scrollView = NSScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.borderType = .bezelBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.documentView = tableView
+
+        let accessoryView = NSView(frame: NSRect(x: 0, y: 0, width: 500, height: 220))
+        accessoryView.addSubview(scrollView)
+
+        NSLayoutConstraint.activate([
+            scrollView.leadingAnchor.constraint(equalTo: accessoryView.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: accessoryView.trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: accessoryView.topAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: accessoryView.bottomAnchor)
+        ])
+
+        alert.accessoryView = accessoryView
+        tableView.reloadData()
+        if !entries.isEmpty {
+            tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        }
+
+        if alert.runModal() == .alertFirstButtonReturn, entries.indices.contains(tableView.selectedRow) {
+            switcherExclusionManager.add(bundleIdentifier: entries[tableView.selectedRow].bundleIdentifier)
         }
     }
 
@@ -1415,6 +1645,30 @@ final class SettingsView: NSView {
 
         showRunningAppsSelection(entries: entries)
     }
+
+    @objc
+    private func removeSwitcherExclusionEntry(_ sender: NSButton) {
+        let selectedRow = switcherExclusionTableView.selectedRow
+        guard switcherExcludedEntries.indices.contains(selectedRow) else {
+            return
+        }
+
+        switcherExclusionManager.remove(bundleIdentifier: switcherExcludedEntries[selectedRow].bundleIdentifier)
+    }
+
+    @objc
+    private func showAddSwitcherExclusionSheet(_ sender: NSButton) {
+        let entries = runningAppEntriesForSwitcher()
+        guard !entries.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "No Running Apps"
+            alert.informativeText = "There are no currently running apps available to exclude from the switcher."
+            alert.runModal()
+            return
+        }
+
+        showRunningAppsSelectionForSwitcher(entries: entries)
+    }
 }
 
 extension SettingsView: NSTableViewDataSource, NSTableViewDelegate {
@@ -1425,6 +1679,10 @@ extension SettingsView: NSTableViewDataSource, NSTableViewDelegate {
 
         if tableView === blacklistTableView || tableView.identifier?.rawValue == "runningAppsTable" {
             return tableView === blacklistTableView ? blacklistEntries.count : addSheetEntries.count
+        }
+
+        if tableView === switcherExclusionTableView || tableView.identifier?.rawValue == "switcherRunningAppsTable" {
+            return tableView === switcherExclusionTableView ? switcherExcludedEntries.count : switcherAddSheetEntries.count
         }
 
         return 0
@@ -1454,6 +1712,15 @@ extension SettingsView: NSTableViewDataSource, NSTableViewDelegate {
             }
         }
 
+        if tableView === switcherExclusionTableView ||
+            tableView.identifier?.rawValue == "switcherRunningAppsTable" {
+            return tableViewSwitchExclusionCell(
+                tableView: tableView,
+                tableColumn: tableColumn,
+                row: row
+            )
+        }
+
         let entries = tableView === blacklistTableView ? blacklistEntries : addSheetEntries
         guard entries.indices.contains(row) else {
             return nil
@@ -1471,6 +1738,28 @@ extension SettingsView: NSTableViewDataSource, NSTableViewDelegate {
         }
     }
 
+    private func tableViewSwitchExclusionCell(
+        tableView: NSTableView,
+        tableColumn: NSTableColumn,
+        row: Int
+    ) -> NSView? {
+        let entries = tableView === switcherExclusionTableView ? switcherExcludedEntries : switcherAddSheetEntries
+        guard entries.indices.contains(row) else {
+            return nil
+        }
+
+        let entry = entries[row]
+
+        switch tableColumn.identifier {
+        case SwitcherExclusionColumn.app:
+            return makeAppCell(identifier: SwitcherExclusionColumn.app, entry: entry)
+        case SwitcherExclusionColumn.bundleIdentifier:
+            return makeTextCell(identifier: SwitcherExclusionColumn.bundleIdentifier, text: entry.bundleIdentifier)
+        default:
+            return nil
+        }
+    }
+
     func tableViewSelectionDidChange(_ notification: Notification) {
         guard let tableView = notification.object as? NSTableView else {
             return
@@ -1483,6 +1772,10 @@ extension SettingsView: NSTableViewDataSource, NSTableViewDelegate {
 
         if tableView === blacklistTableView {
             updateBlacklistButtonState()
+        }
+
+        if tableView === switcherExclusionTableView {
+            updateSwitcherExclusionButtonState()
         }
     }
 

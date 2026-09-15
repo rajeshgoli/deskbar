@@ -251,6 +251,7 @@ struct TaskButtonWaitingBadgeTests {
             agentAnnotation: makeAnnotation(waiting: waiting),
             settings: settings ?? makeSettings(),
             blacklistManager: BlacklistManager(),
+            switcherExclusionManager: SwitcherExclusionManager(),
             pluginMenuConfiguration: showsActionButton
                 ? TaskButtonPluginMenuConfiguration(
                     buttonTitle: "sm",

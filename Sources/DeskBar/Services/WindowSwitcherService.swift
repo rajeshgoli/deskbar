@@ -44,6 +44,8 @@ final class WindowSwitcherService {
     private let settings: TaskbarSettings
     private let accessibilityService: AccessibilityService
     private let thumbnailService: ThumbnailService
+    private let switcherExclusionManager: SwitcherExclusionManager
+    private var switcherExclusionObserver: NSObjectProtocol?
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var overlayPanels: [CGDirectDisplayID: WindowSwitcherPanel] = [:]
@@ -58,17 +60,31 @@ final class WindowSwitcherService {
         windowManager: WindowManager,
         settings: TaskbarSettings,
         thumbnailService: ThumbnailService,
-        accessibilityService: AccessibilityService = AccessibilityService()
+        accessibilityService: AccessibilityService = AccessibilityService(),
+        switcherExclusionManager: SwitcherExclusionManager
     ) {
         self.windowManager = windowManager
         self.settings = settings
         self.thumbnailService = thumbnailService
         self.accessibilityService = accessibilityService
+        self.switcherExclusionManager = switcherExclusionManager
         bindSettings()
+        switcherExclusionObserver = NotificationCenter.default.addObserver(
+            forName: SwitcherExclusionManager.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.rebuildSessionForExclusionChange()
+            }
+        }
         updateForAccessibilityPermissionChange(isGranted: AXIsProcessTrusted())
     }
 
     deinit {
+        if let switcherExclusionObserver {
+            NotificationCenter.default.removeObserver(switcherExclusionObserver)
+        }
         stop()
     }
 
@@ -121,10 +137,12 @@ final class WindowSwitcherService {
 
     static func switchableWindows(
         from windows: [WindowInfo],
-        zOrderedWindowIDs: [CGWindowID]
+        zOrderedWindowIDs: [CGWindowID],
+        excludedBundleIDs: Set<String> = []
     ) -> [WindowInfo] {
         let candidates = windows.filter {
-            $0.cgWindowID != nil && !$0.isMinimized && !$0.isHidden
+            $0.cgWindowID != nil && !$0.isMinimized && !$0.isHidden &&
+                ($0.bundleIdentifier.map { !excludedBundleIDs.contains($0) } ?? true)
         }
         let windowsByCGID = Dictionary(
             preservingFirstValues: candidates.compactMap { window -> (CGWindowID, WindowInfo)? in
@@ -406,7 +424,8 @@ final class WindowSwitcherService {
             windowManager.refresh()
             sessionWindows = Self.switchableWindows(
                 from: windowManager.windows,
-                zOrderedWindowIDs: Self.zOrderedWindowIDs()
+                zOrderedWindowIDs: Self.zOrderedWindowIDs(),
+                excludedBundleIDs: switcherExclusionManager.excludedBundleIDs
             )
             selectedIndex = nil
             thumbnailProvider = WindowSwitcherThumbnailProvider(thumbnailService: thumbnailService)
@@ -449,6 +468,29 @@ final class WindowSwitcherService {
         if let selectedWindow {
             activate(window: selectedWindow)
         }
+    }
+
+    @MainActor
+    private func rebuildSessionForExclusionChange() {
+        guard !sessionWindows.isEmpty else {
+            return
+        }
+
+        sessionWindows = Self.switchableWindows(
+            from: windowManager.windows,
+            zOrderedWindowIDs: Self.zOrderedWindowIDs(),
+            excludedBundleIDs: switcherExclusionManager.excludedBundleIDs
+        )
+
+        guard !sessionWindows.isEmpty else {
+            endSession(commitSelection: false)
+            return
+        }
+
+        if let selectedIndex, !sessionWindows.indices.contains(selectedIndex) {
+            self.selectedIndex = sessionWindows.count - 1
+        }
+        showOverlay()
     }
 
     @MainActor

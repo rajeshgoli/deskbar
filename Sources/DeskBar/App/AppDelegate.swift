@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var thumbnailService: ThumbnailService?
     private var windowLayoutSnapshotManager: WindowLayoutSnapshotManager?
     private var windowSwitcherService: WindowSwitcherService?
+    private var switcherExclusionManager: SwitcherExclusionManager?
     private var settingsWindowController: SettingsWindowController?
     private var statusItem: NSStatusItem?
     private var restoreWindowsMenuItem: NSMenuItem?
@@ -47,6 +48,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let blacklistManager = BlacklistManager()
         self.blacklistManager = blacklistManager
+
+        let switcherExclusionManager = SwitcherExclusionManager()
+        self.switcherExclusionManager = switcherExclusionManager
 
         let permissions = PermissionsManager()
         permissionsManager = permissions
@@ -82,7 +86,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let windowSwitcherService = WindowSwitcherService(
             windowManager: wm,
             settings: settings,
-            thumbnailService: thumbnailService
+            thumbnailService: thumbnailService,
+            switcherExclusionManager: switcherExclusionManager
         )
         self.windowSwitcherService = windowSwitcherService
 
@@ -99,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindowController = SettingsWindowController(
             settings: settings,
             blacklistManager: blacklistManager,
+            switcherExclusionManager: switcherExclusionManager,
             pinnedAppManager: pinnedAppManager
         )
         configureStatusItem()
@@ -320,7 +326,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let smPluginService,
             let systemResourceMonitor,
             let blacklistManager,
-            let pinnedAppManager
+            let pinnedAppManager,
+            let switcherExclusionManager
         else {
             return
         }
@@ -346,6 +353,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 permissionsManager: permissionsManager,
                 settings: settings,
                 blacklistManager: blacklistManager,
+                switcherExclusionManager: switcherExclusionManager,
                 pinnedAppManager: pinnedAppManager,
                 systemResourceMonitor: systemResourceMonitor,
                 thumbnailService: thumbnailService,
