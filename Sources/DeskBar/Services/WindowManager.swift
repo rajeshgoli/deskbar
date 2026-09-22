@@ -88,6 +88,39 @@ final class WindowManager: ObservableObject {
         }
     }
 
+    /// Patch known windows after title-only AX events. AX title notifications
+    /// also bubble up from text inside windows (for example a changing web page).
+    /// Those cannot rename a task button and must not trigger window discovery.
+    func refreshTitles(for elements: [AXUIElement]) {
+        var updates: [CGWindowID: String] = [:]
+        for element in elements {
+            var pid: pid_t = 0
+            guard Self.isWindowTitleNotification(
+                role: axStringValue(for: element, attribute: kAXRoleAttribute as CFString)
+            ) else { continue }
+            guard AXUIElementGetPid(element, &pid) == .success,
+                  let id = accessibilityService.getWindowID(for: element),
+                  let window = authoritative[id], window.pid == pid,
+                  let title = axTitle(for: element) else {
+                refresh()
+                return
+            }
+            updates[id] = title
+        }
+        var changed = false
+        for (id, title) in updates {
+            guard let window = authoritative[id], window.title != title else { continue }
+            authoritative[id] = window.replacingTitle(title)
+            changed = true
+        }
+        guard changed else { return }
+        publishWindows(forceDerivedState: false, refreshTrayCandidates: false)
+    }
+
+    static func isWindowTitleNotification(role: String?) -> Bool {
+        role == (kAXWindowRole as String)
+    }
+
     func notifyFocusMayHaveChanged() {
         focusRevisionSequence &+= 1
         let sequence = focusRevisionSequence
@@ -725,7 +758,8 @@ final class WindowManager: ObservableObject {
         )
     }
 
-    private func publishWindows(currentWindowOrder: [String]? = nil, forceDerivedState: Bool = true) {
+    private func publishWindows(currentWindowOrder: [String]? = nil, forceDerivedState: Bool = true,
+                                refreshTrayCandidates: Bool = true) {
         let combined = (Array(authoritative.values) + Array(provisional.values)).filter { window in
             !isBlacklisted(bundleIdentifier: window.bundleIdentifier)
         }
@@ -750,7 +784,7 @@ final class WindowManager: ObservableObject {
         }
 
         if didChangePublishedWindowState || forceDerivedState {
-            publishDerivedState()
+            publishDerivedState(refreshTrayCandidates: refreshTrayCandidates)
         }
     }
 
@@ -796,7 +830,7 @@ final class WindowManager: ObservableObject {
         return retainedOrder
     }
 
-    private func publishDerivedState() {
+    private func publishDerivedState(refreshTrayCandidates: Bool = true) {
         let visibleWindowPIDs = Self.visibleWindowPIDs(from: windows)
         let visibleWindowBundleIdentifiers = Self.visibleWindowBundleIdentifiers(from: windows)
         let nextVisibleWindows = windows.filter { visibleWindowPIDs.contains($0.pid) }
@@ -804,7 +838,8 @@ final class WindowManager: ObservableObject {
             visibleWindows = nextVisibleWindows
         }
 
-        let candidatesByKey = trayApplicationInfoByCandidateKey()
+        let candidatesByKey = refreshTrayCandidates || !hasTrayCandidateInfoCache
+            ? trayApplicationInfoByCandidateKey() : trayCandidateInfosByKey
         trayCandidateInfosByKey = candidatesByKey
         hasTrayCandidateInfoCache = true
         let trayCandidates = Self.trayApplicationCandidates(

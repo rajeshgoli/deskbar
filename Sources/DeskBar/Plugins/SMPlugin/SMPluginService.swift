@@ -1288,7 +1288,7 @@ final class SMPluginService: ObservableObject {
             request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
 
             do {
-                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                let (bytes, response) = try await SMHTTPClient.session.bytes(for: request)
                 if let httpResponse = response as? HTTPURLResponse,
                    !(200...299).contains(httpResponse.statusCode) {
                     writeDiagnostic("event stream returned HTTP \(httpResponse.statusCode)")
@@ -1457,7 +1457,7 @@ final class SMPluginService: ObservableObject {
         request.timeoutInterval = 0.75
 
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, _) = try await SMHTTPClient.session.data(for: request)
             let response = try JSONDecoder().decode(SMSessionsResponse.self, from: data)
             return response.sessions.compactMap { session in
                 guard !session.tmuxSession.isEmpty else {
@@ -1539,7 +1539,7 @@ final class SMPluginService: ObservableObject {
         request.timeoutInterval = 0.75
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await SMHTTPClient.session.data(for: request)
             if let httpResponse = response as? HTTPURLResponse,
                !(200...299).contains(httpResponse.statusCode) {
                 return nil
@@ -1610,7 +1610,7 @@ final class SMPluginService: ObservableObject {
         request.timeoutInterval = 0.75
 
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, _) = try await SMHTTPClient.session.data(for: request)
             return try JSONDecoder().decode(SMEventStateResponse.self, from: data)
         } catch {
             return nil
@@ -2329,7 +2329,7 @@ final class SMPluginService: ObservableObject {
         request.timeoutInterval = retireTimeout
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await SMHTTPClient.session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse else {
                 return (false, "No response from Session Manager.")
             }
@@ -2390,7 +2390,7 @@ final class SMPluginService: ObservableObject {
         request.timeoutInterval = retireTimeout
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await SMHTTPClient.session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200...299).contains(httpResponse.statusCode) else {
                 return false

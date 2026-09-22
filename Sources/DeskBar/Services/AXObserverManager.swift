@@ -1,11 +1,31 @@
 import AppKit
 import ApplicationServices
 
+/// Full discovery wins over title-only work in a coalesced notification burst.
+struct AXRefreshBatch {
+    private(set) var titleElements: [AXUIElement] = []
+    private(set) var needsFullRefresh = false
+
+    mutating func add(_ notification: CFString, element: AXUIElement) {
+        guard !needsFullRefresh else { return }
+        guard notification == kAXTitleChangedNotification as CFString,
+              titleElements.count < 64 else {
+            needsFullRefresh = true
+            titleElements.removeAll()
+            return
+        }
+        if !titleElements.contains(where: { CFEqual($0, element) }) {
+            titleElements.append(element)
+        }
+    }
+}
+
 final class AXObserverManager {
     private weak var windowManager: WindowManager?
     private let debouncer = Debouncer()
     private var workspaceObservers: [NSObjectProtocol] = []
     private var observers: [pid_t: AXObserver] = [:]
+    private var pendingRefresh = AXRefreshBatch()
 
     private let notificationNames: [CFString] = [
         kAXCreatedNotification as CFString,
@@ -119,14 +139,23 @@ final class AXObserverManager {
         )
     }
 
-    fileprivate func handleAXNotification(_ notification: CFString) {
+    fileprivate func handleAXNotification(_ notification: CFString, element: AXUIElement) {
         if notification == kAXFocusedWindowChangedNotification as CFString ||
             notification == kAXMainWindowChangedNotification as CFString {
             windowManager?.notifyFocusMayHaveChanged()
         }
 
+        pendingRefresh.add(notification, element: element)
+
         debouncer.debounce { [weak self] in
-            self?.windowManager?.refresh()
+            guard let self else { return }
+            let batch = self.pendingRefresh
+            self.pendingRefresh = AXRefreshBatch()
+            if batch.needsFullRefresh {
+                self.windowManager?.refresh()
+            } else {
+                self.windowManager?.refreshTitles(for: batch.titleElements)
+            }
         }
     }
 
@@ -146,5 +175,5 @@ private let observerCallback: AXObserverCallback = { _, element, notification, r
         manager.handleWindowResized(element)
     }
 
-    manager.handleAXNotification(notification)
+    manager.handleAXNotification(notification, element: element)
 }

@@ -49,6 +49,16 @@ struct WindowInfo: Equatable, Identifiable {
         return provisionalID ?? "\(pid)-\(appName)"
     }
 
+    /// A title notification cannot change a window's identity, placement, or icon.
+    func replacingTitle(_ title: String) -> WindowInfo {
+        WindowInfo(
+            pid: pid, cgWindowID: cgWindowID, provisionalID: provisionalID,
+            appName: appName, title: title, icon: icon, bundleIdentifier: bundleIdentifier,
+            applicationURL: applicationURL, isMinimized: isMinimized,
+            isHidden: isHidden, isProvisional: isProvisional
+        )
+    }
+
     static func == (lhs: WindowInfo, rhs: WindowInfo) -> Bool {
         lhs.pid == rhs.pid &&
             lhs.cgWindowID == rhs.cgWindowID &&
