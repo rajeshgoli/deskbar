@@ -28,6 +28,17 @@ struct TaskButtonPluginMenuConfiguration {
     let tintColor: NSColor
     let showsActionButton: Bool
     let menuProvider: () -> NSMenu
+
+    /// Closures carry fresh menu data even when the visible button is unchanged.
+    static func sameAppearance(_ lhs: Self?, _ rhs: Self?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): return true
+        case let (lhs?, rhs?):
+            return lhs.buttonTitle == rhs.buttonTitle && lhs.tintColor == rhs.tintColor &&
+                lhs.showsActionButton == rhs.showsActionButton
+        default: return false
+        }
+    }
 }
 
 final class TaskButtonView: NSView, NSDraggingSource {
@@ -231,10 +242,13 @@ final class TaskButtonView: NSView, NSDraggingSource {
     }
 
     var thumbnailProvider: (@MainActor (CGWindowID) async -> NSImage?)?
+    private var isUpdatingState = false
 
     var isActive: Bool {
         didSet {
-            updateAppearance()
+            if oldValue != isActive, !isUpdatingState {
+                updateAppearance()
+            }
         }
     }
 
@@ -1189,6 +1203,16 @@ final class TaskButtonView: NSView, NSDraggingSource {
         let previousThumbnailEligibility = shouldShowThumbnailPopover
         let previousWindowID = self.windowInfo.cgWindowID
 
+        let appearanceChanged = self.windowInfo != windowInfo || self.isActive != isActive ||
+            self.hasBadge != hasBadge || self.isAccessibilityAvailable != isAccessibilityAvailable ||
+            self.runtimeState != runtimeState || self.showsActivityOverlay != showsActivityOverlay ||
+            self.agentAnnotation != agentAnnotation ||
+            !TaskButtonPluginMenuConfiguration.sameAppearance(self.pluginMenuConfiguration, pluginMenuConfiguration)
+        // Always refresh the menu closure, even when its presentation is unchanged.
+        self.pluginMenuConfiguration = pluginMenuConfiguration
+        guard appearanceChanged else { return }
+
+        isUpdatingState = true
         self.windowInfo = windowInfo
         self.isActive = isActive
         self.hasBadge = hasBadge
@@ -1197,6 +1221,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         self.showsActivityOverlay = showsActivityOverlay
         self.agentAnnotation = agentAnnotation
         self.pluginMenuConfiguration = pluginMenuConfiguration
+        isUpdatingState = false
         updateWidthConstraint()
 
         if previousWindowID != windowInfo.cgWindowID {
