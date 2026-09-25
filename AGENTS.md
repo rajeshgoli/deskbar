@@ -47,10 +47,13 @@ Then:
 Install and restart:
 
 ```bash
-swift build -c release
-DESKBAR_REQUIRE_SIGNING=1 bash scripts/package.sh
-pkill -x DeskBar; ditto .build/release/DeskBar.app /Applications/DeskBar.app
+swift build -c release &&
+DESKBAR_REQUIRE_SIGNING=1 bash scripts/package.sh &&
+{ pkill -x DeskBar; while pgrep -xq DeskBar; do sleep 0.2; done; } &&
+ditto .build/release/DeskBar.app /Applications/DeskBar.app &&
 open /Applications/DeskBar.app
 ```
+
+The `&&` chain stops at the first failure, so a failed build never installs a stale binary. The loop waits for the old DeskBar to exit before replacing it.
 
 `DESKBAR_REQUIRE_SIGNING=1` matters: an ad-hoc-signed install loses the Accessibility and Screen Recording grants and I have to re-approve them. Quit with `pkill` (SIGTERM), never `kill -9`, so DeskBar restores the Dock on the way out.
