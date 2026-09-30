@@ -24,7 +24,7 @@ Workflow as usual:
 
 ## 3. Review loop
 
-Request a review with `sm request-codex-review <pr-number>`. Treat the response as registration only, then go idle — do not poll. If Session Manager cannot take the request, post `@codex review` as a PR comment, check back after five minutes, again after five more. If codex hasn't acknowledged your review after 10 minutes with 👀 smiley, you can re-post the request. If nothing has landed after 20 minutes, you can re-post the review request.
+**Requesting a review.** Request with `sm request-review <pr-number>`. This is registration only; sm picks the reviewer and wakes you when the review is on the PR. Go idle and wait — do not poll. If sm refuses, or wakes you saying no reviewer could take it, tell me and stand by. Do not post `@codex review` yourself.
 
 Before acting on a review, confirm it belongs to your current request and was posted after your latest push. A review existing is not enough on its own.
 
