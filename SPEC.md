@@ -344,8 +344,10 @@ Icons for running apps that have no visible windows in the current Space/monitor
 
 **Interactions:**
 - **Left-click:** `NSRunningApplication.activate(options: .activateAllWindows)`. If the app has windows on another Space, macOS switches to that Space. If the app has no windows at all (e.g., a menu-bar-only app that also has `.regular` policy, or an app where the user closed all windows), clicking activates the app which typically opens a new window.
-- **Right-click:** Context menu with "Quit", "Hide", and "Pin to Launcher". No Close/Minimize since there are no local windows to act on.
+- **Right-click:** Context menu with "Quit", "Hide from Tray", and "Pin to Launcher". No Close/Minimize since there are no local windows to act on.
 - **Hover:** Tooltip shows app name. No thumbnail (no local window to capture).
+
+**Hiding tray icons:** "Hide from Tray" stores the app's bundle identifier and name in UserDefaults, so the choice survives app relaunches and reboots. It affects only the app-level tray icon; the app keeps running, and its task buttons, pinned launcher, and minimized-window items remain available. The tray's overflow button provides a "Show Hidden Apps" submenu, even when no other icons remain or the hidden apps have quit. Settings > Tray has a "Hide selected tray app icons" toggle (enabled by default) and "Show All Hidden Apps" button. Disabling the toggle shows the icons without discarding the saved choices and disables the "Hide from Tray" action until re-enabled.
 
 **Ordering:** Alphabetical by app name. Not drag-reorderable (this zone is informational, not a workspace organizer).
 

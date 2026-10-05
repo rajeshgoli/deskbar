@@ -92,6 +92,18 @@ final class RunningAppTrayView: NSStackView {
     }
 
     private func bindState() {
+        settings.$enableTrayIconHiding
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.rebuildIcons() }
+            .store(in: &cancellables)
+
+        settings.$hiddenTrayApps
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.rebuildIcons()
+            }
+            .store(in: &cancellables)
+
         windowManager.$windows
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -221,10 +233,15 @@ final class RunningAppTrayView: NSStackView {
 
     static func trayApplications(
         _ applications: [TrayApplicationInfo],
-        excludingOwnersOf minimizedWindows: [WindowInfo]
+        excludingOwnersOf minimizedWindows: [WindowInfo],
+        hiddenBundleIdentifiers: Set<String> = [],
+        hidingEnabled: Bool = true
     ) -> [TrayApplicationInfo] {
         let minimizedWindowPIDs = Set(minimizedWindows.map(\.pid))
-        return applications.filter { !minimizedWindowPIDs.contains($0.pid) }
+        return applications.filter {
+            !minimizedWindowPIDs.contains($0.pid) &&
+                (!hidingEnabled || !($0.bundleIdentifier.map(hiddenBundleIdentifiers.contains) ?? false))
+        }
     }
 
     private func rebuildIcons() {
@@ -235,7 +252,9 @@ final class RunningAppTrayView: NSStackView {
         // they win and the app-level icon is dropped.
         let applications = Self.trayApplications(
             localTrayApps,
-            excludingOwnersOf: minimizedWindows
+            excludingOwnersOf: minimizedWindows,
+            hiddenBundleIdentifiers: Set(settings.hiddenTrayApps.keys),
+            hidingEnabled: settings.enableTrayIconHiding
         )
         let showsCollapsedWidget = shouldShowCollapsedSystemResourceWidget
         let signature = ContentSignature(
@@ -250,6 +269,8 @@ final class RunningAppTrayView: NSStackView {
             },
             minimizedWindowIDs: minimizedWindows.map(\.id),
             minimizedWindowTitles: minimizedWindows.map(\.title),
+            hiddenTrayApps: settings.hiddenTrayApps,
+            enableTrayIconHiding: settings.enableTrayIconHiding,
             showsCollapsedSystemResourceWidget: showsCollapsedWidget
         )
         guard signature != lastContentSignature else {
@@ -275,9 +296,18 @@ final class RunningAppTrayView: NSStackView {
         }
 
         for application in applications {
+            let hideFromTray: (() -> Void)?
+            if settings.enableTrayIconHiding, let bundleIdentifier = application.bundleIdentifier, !bundleIdentifier.isEmpty {
+                hideFromTray = { [settings] in
+                    settings.hideTrayApp(bundleIdentifier: bundleIdentifier, name: application.name)
+                }
+            } else {
+                hideFromTray = nil
+            }
             let iconView = TrayIconView(
                 application: application,
-                pinnedAppManager: pinnedAppManager
+                pinnedAppManager: pinnedAppManager,
+                hideFromTray: hideFromTray
             )
             applicationIconViews.append(iconView)
             iconsStackView.addArrangedSubview(iconView)
@@ -326,7 +356,8 @@ final class RunningAppTrayView: NSStackView {
         // rather than being folded into the overflow menu.
         itemCount += currentMinimizedWindows.count
         itemCount += visibleAppCount
-        if hiddenAppCount > 0 {
+        // Keep a way to restore icons even when every app is hidden, including apps not running.
+        if hiddenAppCount > 0 || !settings.hiddenTrayApps.isEmpty {
             itemCount += 1
         }
         return itemCount
@@ -353,12 +384,23 @@ final class RunningAppTrayView: NSStackView {
         }
 
         overflowedApplications = Array(currentApplications.dropFirst(visibleAppCount))
-        overflowButton.isHidden = overflowedApplications.isEmpty
+        overflowButton.isHidden = overflowedApplications.isEmpty && settings.hiddenTrayApps.isEmpty
+        let menuLabel = settings.hiddenTrayApps.isEmpty ? "More tray apps" : "More tray apps / Show Hidden Apps"
+        overflowButton.toolTip = menuLabel
+        overflowButton.setAccessibilityLabel(menuLabel)
         dividerView.isHidden = plannedIconItemCount(visibleApplicationCapacity: visibleApplicationCapacity) == 0
     }
 
     @objc
     private func showOverflowMenu(_ sender: NSButton) {
+        makeOverflowMenu().popUp(
+            positioning: nil,
+            at: NSPoint(x: 0, y: sender.bounds.height + 2),
+            in: sender
+        )
+    }
+
+    func makeOverflowMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
@@ -374,17 +416,50 @@ final class RunningAppTrayView: NSStackView {
             menu.addItem(item)
         }
 
-        if overflowedApplications.isEmpty {
-            let item = NSMenuItem(title: "No hidden tray apps", action: nil, keyEquivalent: "")
+        if !settings.hiddenTrayApps.isEmpty {
+            if !menu.items.isEmpty {
+                menu.addItem(.separator())
+            }
+            let restoreMenu = NSMenu()
+            restoreMenu.autoenablesItems = false
+            for (bundleIdentifier, name) in settings.hiddenTrayApps.sorted(by: {
+                let order = $0.value.localizedStandardCompare($1.value)
+                return order == .orderedSame ? $0.key < $1.key : order == .orderedAscending
+            }) {
+                let item = NSMenuItem(title: name, action: #selector(showHiddenApplication(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = bundleIdentifier
+                restoreMenu.addItem(item)
+            }
+            if settings.hiddenTrayApps.count > 1 {
+                restoreMenu.addItem(.separator())
+                let item = NSMenuItem(title: "Show All", action: #selector(showAllHiddenApplications(_:)), keyEquivalent: "")
+                item.target = self
+                restoreMenu.addItem(item)
+            }
+            let item = NSMenuItem(title: "Show Hidden Apps", action: nil, keyEquivalent: "")
+            item.submenu = restoreMenu
+            menu.addItem(item)
+        }
+
+        if menu.items.isEmpty {
+            let item = NSMenuItem(title: "No more tray apps", action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
         }
 
-        menu.popUp(
-            positioning: nil,
-            at: NSPoint(x: 0, y: sender.bounds.height + 2),
-            in: sender
-        )
+        return menu
+    }
+
+    @objc
+    private func showHiddenApplication(_ sender: NSMenuItem) {
+        guard let bundleIdentifier = sender.representedObject as? String else { return }
+        settings.showTrayApp(bundleIdentifier: bundleIdentifier)
+    }
+
+    @objc
+    private func showAllHiddenApplications(_ sender: NSMenuItem) {
+        settings.showAllTrayApps()
     }
 
     @objc
@@ -500,5 +575,7 @@ private struct ContentSignature: Equatable {
     let applications: [Application]
     let minimizedWindowIDs: [String]
     let minimizedWindowTitles: [String]
+    let hiddenTrayApps: [String: String]
+    let enableTrayIconHiding: Bool
     let showsCollapsedSystemResourceWidget: Bool
 }

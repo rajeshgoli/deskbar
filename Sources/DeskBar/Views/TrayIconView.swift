@@ -5,16 +5,19 @@ final class TrayIconView: NSView {
     private let application: TrayApplicationInfo
     private let pinnedAppManager: PinnedAppManager
     private let accessibilityService: AccessibilityService
+    private let hideFromTray: (() -> Void)?
     private let iconView = NSImageView()
 
     init(
         application: TrayApplicationInfo,
         pinnedAppManager: PinnedAppManager,
-        accessibilityService: AccessibilityService = AccessibilityService()
+        accessibilityService: AccessibilityService = AccessibilityService(),
+        hideFromTray: (() -> Void)? = nil
     ) {
         self.application = application
         self.pinnedAppManager = pinnedAppManager
         self.accessibilityService = accessibilityService
+        self.hideFromTray = hideFromTray
         super.init(frame: .zero)
 
         translatesAutoresizingMaskIntoConstraints = false
@@ -127,7 +130,7 @@ final class TrayIconView: NSView {
         return LauncherApplicationActivator.hasCGWindows(for: runningApplication)
     }
 
-    private func makeContextMenu() -> NSMenu {
+    func makeContextMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
@@ -136,9 +139,9 @@ final class TrayIconView: NSView {
         quitItem.isEnabled = application.runningApplication != nil
         menu.addItem(quitItem)
 
-        let hideItem = NSMenuItem(title: "Hide", action: #selector(hideApplication(_:)), keyEquivalent: "")
+        let hideItem = NSMenuItem(title: "Hide from Tray", action: #selector(hideTrayIcon(_:)), keyEquivalent: "")
         hideItem.target = self
-        hideItem.isEnabled = application.runningApplication != nil
+        hideItem.isEnabled = hideFromTray != nil
         menu.addItem(hideItem)
 
         let pinItem = NSMenuItem(title: "Pin to Launcher", action: #selector(pinToLauncher(_:)), keyEquivalent: "")
@@ -159,8 +162,8 @@ final class TrayIconView: NSView {
     }
 
     @objc
-    private func hideApplication(_ sender: Any?) {
-        application.runningApplication?.hide()
+    private func hideTrayIcon(_ sender: Any?) {
+        hideFromTray?()
     }
 
     @objc

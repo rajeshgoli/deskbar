@@ -38,6 +38,8 @@ final class SettingsView: NSView {
     private let resetAppearanceSlidersButton = NSButton(title: "Reset Sliders to Defaults", target: nil, action: nil)
 
     private let hoverDelaySlider = NSSlider(value: 400, minValue: 100, maxValue: 1000, target: nil, action: nil)
+    private let enableTrayIconHidingCheckbox = NSButton(checkboxWithTitle: "Hide selected tray app icons", target: nil, action: nil)
+    private let showAllHiddenTrayAppsButton = NSButton(title: "Show All Hidden Apps", target: nil, action: nil)
     private let groupingModePopupButton = NSPopUpButton()
     private let dragReorderCheckbox = NSButton(checkboxWithTitle: "Drag reorder", target: nil, action: nil)
     private let middleClickClosesCheckbox = NSButton(checkboxWithTitle: "Middle-click closes", target: nil, action: nil)
@@ -187,7 +189,17 @@ final class SettingsView: NSView {
         blacklistTab.label = "Blacklist"
         blacklistTab.view = makeBlacklistView()
 
-        [generalTab, appearanceTab, behaviorTab, widgetsTab, pluginsTab, launcherTab, blacklistTab].forEach(tabView.addTabViewItem)
+        let trayTab = NSTabViewItem(identifier: "tray")
+        trayTab.label = "Tray"
+        let trayDescription = NSTextField(wrappingLabelWithString: "Right-click an app icon and choose Hide from Tray. Hidden apps keep running, and their window buttons and minimized windows remain available. Disabling this option shows the icons again without forgetting your choices.")
+        trayDescription.textColor = .secondaryLabelColor
+        trayTab.view = makeFormView(rows: [
+            makeCheckboxRow(enableTrayIconHidingCheckbox),
+            trayDescription,
+            makeButtonRow(showAllHiddenTrayAppsButton)
+        ])
+
+        [generalTab, appearanceTab, behaviorTab, widgetsTab, pluginsTab, launcherTab, trayTab, blacklistTab].forEach(tabView.addTabViewItem)
     }
 
     private func configureWidgetDisplayPopupButton() {
@@ -301,6 +313,10 @@ final class SettingsView: NSView {
     }
 
     private func configureActions() {
+        enableTrayIconHidingCheckbox.target = self
+        enableTrayIconHidingCheckbox.action = #selector(enableTrayIconHidingChanged(_:))
+        showAllHiddenTrayAppsButton.target = self
+        showAllHiddenTrayAppsButton.action = #selector(showAllHiddenTrayApps(_:))
         startAtLoginCheckbox.target = self
         startAtLoginCheckbox.action = #selector(startAtLoginChanged(_:))
 
@@ -414,6 +430,14 @@ final class SettingsView: NSView {
     }
 
     private func bindSettings() {
+        settings.$enableTrayIconHiding
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in self?.enableTrayIconHidingCheckbox.state = value ? .on : .off }
+            .store(in: &cancellables)
+        settings.$hiddenTrayApps
+            .receive(on: RunLoop.main)
+            .sink { [weak self] apps in self?.showAllHiddenTrayAppsButton.isEnabled = !apps.isEmpty }
+            .store(in: &cancellables)
         settings.$startAtLogin
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
@@ -1235,6 +1259,16 @@ final class SettingsView: NSView {
     @objc
     private func hoverDelayChanged(_ sender: NSSlider) {
         settings.hoverDelay = sender.doubleValue / 1000
+    }
+
+    @objc
+    private func enableTrayIconHidingChanged(_ sender: NSButton) {
+        settings.enableTrayIconHiding = sender.state == .on
+    }
+
+    @objc
+    private func showAllHiddenTrayApps(_ sender: NSButton) {
+        settings.showAllTrayApps()
     }
 
     @objc

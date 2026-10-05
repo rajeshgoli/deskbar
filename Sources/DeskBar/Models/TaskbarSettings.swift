@@ -71,6 +71,15 @@ class TaskbarSettings: ObservableObject {
         didSet { defaults.set(hoverDelay, forKey: "hoverDelay") }
     }
 
+    /// App-level tray icons only; window buttons and minimized-window items remain available.
+    @Published private(set) var hiddenTrayApps: [String: String] {
+        didSet { defaults.set(hiddenTrayApps, forKey: "hiddenTrayApps") }
+    }
+
+    @Published var enableTrayIconHiding: Bool {
+        didSet { defaults.set(enableTrayIconHiding, forKey: "enableTrayIconHiding") }
+    }
+
     @Published var dockMode: DockMode {
         didSet { defaults.set(dockMode.rawValue, forKey: "dockMode") }
     }
@@ -201,6 +210,8 @@ class TaskbarSettings: ObservableObject {
         middleClickCloses = defaults.object(forKey: "middleClickCloses") as? Bool ?? true
         thumbnailSize = defaults.object(forKey: "thumbnailSize") as? CGFloat ?? Self.defaultThumbnailSize
         hoverDelay = defaults.object(forKey: "hoverDelay") as? TimeInterval ?? 0.4
+        hiddenTrayApps = defaults.dictionary(forKey: "hiddenTrayApps") as? [String: String] ?? [:]
+        enableTrayIconHiding = defaults.object(forKey: "enableTrayIconHiding") as? Bool ?? true
         dockMode = DockMode(rawValue: defaults.string(forKey: "dockMode") ?? "") ?? .independent
         showOverFullScreenApps = defaults.object(forKey: "showOverFullScreenApps") as? Bool ?? false
         flashAttentionIndicators = defaults.object(forKey: "flashAttentionIndicators") as? Bool ?? true
@@ -234,6 +245,19 @@ class TaskbarSettings: ObservableObject {
         animateSessionManagerActivity = defaults.object(forKey: "animateSessionManagerActivity") as? Bool ?? false
         enableSessionManagerTerminalActions = defaults.object(forKey: "enableSessionManagerTerminalActions") as? Bool ?? true
         showSessionManagerActionButton = defaults.object(forKey: "showSessionManagerActionButton") as? Bool ?? true
+    }
+
+    func hideTrayApp(bundleIdentifier: String, name: String) {
+        guard !bundleIdentifier.isEmpty else { return }
+        hiddenTrayApps[bundleIdentifier] = name
+    }
+
+    func showTrayApp(bundleIdentifier: String) {
+        hiddenTrayApps.removeValue(forKey: bundleIdentifier)
+    }
+
+    func showAllTrayApps() {
+        hiddenTrayApps.removeAll()
     }
 
     func resetAppearanceSlidersToDefaults() {
