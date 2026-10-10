@@ -123,14 +123,11 @@ final class NetworkMonitor {
         from interfaces: [NWInterface],
         isUsed: (NWInterface.InterfaceType) -> Bool
     ) -> PrimaryInterface? {
+        // `availableInterfaces` is preference-ordered; `usesInterfaceType` filters out adapters
+        // the path is not routed over without overriding the user's service order.
         let physicalTypes: [NWInterface.InterfaceType] = [.wiredEthernet, .wifi, .cellular]
-        let usedType = physicalTypes.first(where: isUsed)
-        let physical = interfaces.first { interface in
-            guard let usedType else {
-                return physicalTypes.contains(interface.type)
-            }
-            return interface.type == usedType
-        }
+        let physicalInterfaces = interfaces.filter { physicalTypes.contains($0.type) }
+        let physical = physicalInterfaces.first { isUsed($0.type) } ?? physicalInterfaces.first
 
         guard let interface = physical ?? interfaces.first(where: { $0.type != .loopback }) else {
             return nil
