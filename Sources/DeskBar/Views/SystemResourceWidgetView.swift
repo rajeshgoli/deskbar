@@ -6,6 +6,7 @@ final class SystemResourceWidgetView: NSView {
     private static let separatorHeight: CGFloat = 24
     private static let memoryWidth: CGFloat = 170
     private static let metricWidth: CGFloat = 125
+    private static let networkWidth: CGFloat = 130
     private static let collapseWidth: CGFloat = 28
     private static let widgetHeight: CGFloat = 32
     private static let stackSpacing: CGFloat = 8
@@ -19,6 +20,7 @@ final class SystemResourceWidgetView: NSView {
     private let memoryControl = SystemResourceMetricControl(metric: .memory)
     private let cpuControl = SystemResourceMetricControl(metric: .cpu)
     private let gpuControl = SystemResourceMetricControl(metric: .gpu)
+    private let networkControl = SystemResourceMetricControl(metric: .network)
     private let collapseButton = NSButton()
     private var widthConstraint: NSLayoutConstraint?
     private var cancellables = Set<AnyCancellable>()
@@ -85,15 +87,18 @@ final class SystemResourceWidgetView: NSView {
         stackView.addArrangedSubview(memoryControl)
         stackView.addArrangedSubview(cpuControl)
         stackView.addArrangedSubview(gpuControl)
+        stackView.addArrangedSubview(networkControl)
         NSLayoutConstraint.activate([
             separatorView.widthAnchor.constraint(equalToConstant: Self.separatorWidth),
             separatorView.heightAnchor.constraint(equalToConstant: Self.separatorHeight),
             memoryControl.widthAnchor.constraint(equalToConstant: Self.memoryWidth),
             cpuControl.widthAnchor.constraint(equalToConstant: Self.metricWidth),
             gpuControl.widthAnchor.constraint(equalToConstant: Self.metricWidth),
+            networkControl.widthAnchor.constraint(equalToConstant: Self.networkWidth),
             memoryControl.heightAnchor.constraint(equalToConstant: Self.widgetHeight),
             cpuControl.heightAnchor.constraint(equalToConstant: Self.widgetHeight),
-            gpuControl.heightAnchor.constraint(equalToConstant: Self.widgetHeight)
+            gpuControl.heightAnchor.constraint(equalToConstant: Self.widgetHeight),
+            networkControl.heightAnchor.constraint(equalToConstant: Self.widgetHeight)
         ])
 
         configureIconButton(
@@ -153,6 +158,9 @@ final class SystemResourceWidgetView: NSView {
         gpuControl.target = self
         gpuControl.action = #selector(openGPUMonitor(_:))
 
+        networkControl.target = self
+        networkControl.action = #selector(openNetworkMonitor(_:))
+
         collapseButton.target = self
         collapseButton.action = #selector(collapseWidget(_:))
     }
@@ -206,29 +214,49 @@ final class SystemResourceWidgetView: NSView {
                 self?.updateMetricVisibility()
             }
             .store(in: &cancellables)
+
+        settings.$showSystemResourceNetworkMetric
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateMetricVisibility()
+            }
+            .store(in: &cancellables)
+
+        settings.$systemResourceWidgetLocation
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateMetricVisibility()
+            }
+            .store(in: &cancellables)
     }
 
     private func update(with snapshot: SystemResourceSnapshot) {
         memoryControl.update(
-            value: memoryValueString(for: snapshot),
+            value: SystemResourceFormatting.memoryValueString(for: snapshot),
             fraction: snapshot.memoryUsedPercent.map { $0 / 100 },
-            detail: memoryTooltip(for: snapshot),
-            severity: metricSeverity(
+            detail: SystemResourceFormatting.memoryTooltip(for: snapshot) + " Click to open Activity Monitor Memory.",
+            severity: SystemResourceFormatting.severity(
                 percent: snapshot.memoryUsedPercent,
                 pressureLevel: snapshot.memoryPressureLevel
             )
         )
         cpuControl.update(
-            value: percentString(snapshot.cpuPercent),
+            value: SystemResourceFormatting.percentString(snapshot.cpuPercent),
             fraction: snapshot.cpuPercent.map { $0 / 100 },
             detail: metricTooltip(name: "CPU usage", percent: snapshot.cpuPercent, destination: "Activity Monitor CPU History"),
-            severity: metricSeverity(percent: snapshot.cpuPercent)
+            severity: SystemResourceFormatting.severity(percent: snapshot.cpuPercent)
         )
         gpuControl.update(
-            value: percentString(snapshot.gpuPercent),
+            value: SystemResourceFormatting.percentString(snapshot.gpuPercent),
             fraction: snapshot.gpuPercent.map { $0 / 100 },
             detail: metricTooltip(name: "GPU usage", percent: snapshot.gpuPercent, destination: "Activity Monitor GPU History"),
-            severity: metricSeverity(percent: snapshot.gpuPercent)
+            severity: SystemResourceFormatting.severity(percent: snapshot.gpuPercent)
+        )
+        networkControl.update(
+            value: SystemResourceFormatting.networkValueString(for: snapshot.network),
+            fraction: 1,
+            detail: SystemResourceFormatting.networkTooltip(for: snapshot.network) + " Click to open Activity Monitor Network.",
+            severity: SystemResourceFormatting.severity(for: snapshot.network)
         )
     }
 
@@ -236,8 +264,9 @@ final class SystemResourceWidgetView: NSView {
         memoryControl.isHidden = !settings.showSystemResourceMemoryMetric
         cpuControl.isHidden = !settings.showSystemResourceCPUMetric
         gpuControl.isHidden = !settings.showSystemResourceGPUMetric
+        networkControl.isHidden = !settings.showSystemResourceNetworkMetric
 
-        let shouldShow = settings.showSystemResourceWidget &&
+        let shouldShow = settings.showsSystemResourceWidgetInTaskbar &&
             !settings.systemResourceWidgetCollapsed &&
             displayMatchesPin &&
             enabledMetricCount > 0
@@ -259,7 +288,8 @@ final class SystemResourceWidgetView: NSView {
         [
             settings.showSystemResourceMemoryMetric,
             settings.showSystemResourceCPUMetric,
-            settings.showSystemResourceGPUMetric
+            settings.showSystemResourceGPUMetric,
+            settings.showSystemResourceNetworkMetric
         ].filter { $0 }.count
     }
 
@@ -278,6 +308,9 @@ final class SystemResourceWidgetView: NSView {
         if settings.showSystemResourceGPUMetric {
             widths.append(Self.metricWidth)
         }
+        if settings.showSystemResourceNetworkMetric {
+            widths.append(Self.networkWidth)
+        }
         widths.append(Self.collapseWidth)
 
         let spacing = CGFloat(max(widths.count - 1, 0)) * Self.stackSpacing
@@ -291,6 +324,10 @@ final class SystemResourceWidgetView: NSView {
         let collapseItem = NSMenuItem(title: "Collapse Widget", action: #selector(collapseWidget(_:)), keyEquivalent: "")
         collapseItem.target = self
         menu.addItem(collapseItem)
+
+        let menuBarItem = NSMenuItem(title: "Move to Menu Bar", action: #selector(moveWidgetToMenuBar(_:)), keyEquivalent: "")
+        menuBarItem.target = self
+        menu.addItem(menuBarItem)
 
         menu.addItem(.separator())
 
@@ -325,74 +362,18 @@ final class SystemResourceWidgetView: NSView {
         ScreenGeometry.screen(for: displayID)?.localizedName ?? "This Display"
     }
 
-    private func percentString(_ value: Double?) -> String {
-        guard let value else {
-            return "--"
-        }
-
-        return "\(Int(value.rounded()))%"
-    }
-
-    private func memoryValueString(for snapshot: SystemResourceSnapshot) -> String {
-        guard let usedBytes = snapshot.memoryUsedBytes,
-              let totalBytes = snapshot.memoryTotalBytes else {
-            return percentString(snapshot.memoryUsedPercent)
-        }
-
-        return "\(Self.memoryAmountString(usedBytes, includesUnit: false))/\(Self.memoryAmountString(totalBytes, includesUnit: true))"
-    }
-
-    private func memoryTooltip(for snapshot: SystemResourceSnapshot) -> String {
-        let used = memoryValueString(for: snapshot)
-        let pressure = percentString(snapshot.memoryPressurePercent)
-        let free = snapshot.memoryFreePercent.map { "\(Int($0.rounded()))% free" } ?? "free memory unavailable"
-        return "Memory: \(used). Pressure: \(snapshot.memoryPressureLevel.displayName), \(pressure) pressure, \(free). Click to open Activity Monitor Memory."
-    }
-
     private func metricTooltip(name: String, percent: Double?, destination: String) -> String {
-        "\(name): \(percentString(percent)). Click to open \(destination)."
-    }
-
-    private func metricSeverity(
-        percent: Double?,
-        pressureLevel: MemoryPressureLevel? = nil
-    ) -> SystemResourceMetricSeverity {
-        if pressureLevel == .critical {
-            return .critical
-        }
-
-        if pressureLevel == .warning {
-            return .warning
-        }
-
-        guard let percent else {
-            return .unknown
-        }
-
-        if percent >= 90 {
-            return .critical
-        }
-
-        if percent >= 75 {
-            return .warning
-        }
-
-        return .normal
-    }
-
-    private static func memoryAmountString(_ bytes: UInt64, includesUnit: Bool) -> String {
-        let gibibytes = Double(bytes) / 1_073_741_824
-        let suffix = includesUnit ? "G" : ""
-        if gibibytes >= 10 {
-            return "\(Int(gibibytes.rounded()))\(suffix)"
-        }
-
-        return String(format: "%.1f%@", gibibytes, suffix)
+        "\(name): \(SystemResourceFormatting.percentString(percent)). Click to open \(destination)."
     }
 
     @objc
     private func collapseWidget(_ sender: Any?) {
         settings.systemResourceWidgetCollapsed = true
+    }
+
+    @objc
+    private func moveWidgetToMenuBar(_ sender: Any?) {
+        settings.systemResourceWidgetLocation = .menuBar
     }
 
     @objc
@@ -423,6 +404,11 @@ final class SystemResourceWidgetView: NSView {
     @objc
     private func openGPUMonitor(_ sender: Any?) {
         ActivityMonitorLauncher.open(.gpu)
+    }
+
+    @objc
+    private func openNetworkMonitor(_ sender: Any?) {
+        ActivityMonitorLauncher.open(.network)
     }
 }
 
@@ -510,13 +496,16 @@ final class CollapsedSystemResourceWidgetView: NSView {
     private func updateTooltip(with snapshot: SystemResourceSnapshot) {
         var parts: [String] = []
         if settings.showSystemResourceMemoryMetric {
-            parts.append("MEM \(percentString(snapshot.memoryUsedPercent))")
+            parts.append("MEM \(SystemResourceFormatting.percentString(snapshot.memoryUsedPercent))")
         }
         if settings.showSystemResourceCPUMetric {
-            parts.append("CPU \(percentString(snapshot.cpuPercent))")
+            parts.append("CPU \(SystemResourceFormatting.percentString(snapshot.cpuPercent))")
         }
         if settings.showSystemResourceGPUMetric {
-            parts.append("GPU \(percentString(snapshot.gpuPercent))")
+            parts.append("GPU \(SystemResourceFormatting.percentString(snapshot.gpuPercent))")
+        }
+        if settings.showSystemResourceNetworkMetric {
+            parts.append("NET \(SystemResourceFormatting.networkValueString(for: snapshot.network))")
         }
 
         button.toolTip = "System resources: \(parts.joined(separator: "  "))"
@@ -564,14 +553,6 @@ final class CollapsedSystemResourceWidgetView: NSView {
         ScreenGeometry.screen(for: displayID)?.localizedName ?? "This Display"
     }
 
-    private func percentString(_ value: Double?) -> String {
-        guard let value else {
-            return "--"
-        }
-
-        return "\(Int(value.rounded()))%"
-    }
-
     @objc
     private func expandWidget(_ sender: Any?) {
         settings.systemResourceWidgetCollapsed = false
@@ -591,13 +572,6 @@ final class CollapsedSystemResourceWidgetView: NSView {
     private func hideWidget(_ sender: Any?) {
         settings.showSystemResourceWidget = false
     }
-}
-
-private enum SystemResourceMetricSeverity {
-    case normal
-    case warning
-    case critical
-    case unknown
 }
 
 private final class SystemResourceMetricControl: NSControl {
@@ -626,7 +600,7 @@ private final class SystemResourceMetricControl: NSControl {
     }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: metric == .memory ? 170 : 125, height: 32)
+        NSSize(width: metric.controlWidth, height: 32)
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -691,8 +665,8 @@ private final class SystemResourceMetricControl: NSControl {
 
             trackView.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 8),
             trackView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            trackView.widthAnchor.constraint(equalToConstant: metric == .memory ? 76 : 54),
-            trackView.heightAnchor.constraint(equalToConstant: 10),
+            trackView.widthAnchor.constraint(equalToConstant: metric.trackWidth),
+            trackView.heightAnchor.constraint(equalToConstant: metric.trackHeight),
 
             valueLabel.leadingAnchor.constraint(equalTo: trackView.trailingAnchor, constant: 8),
             valueLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -708,7 +682,7 @@ private final class SystemResourceMetricControl: NSControl {
     private func updateColors(severity: SystemResourceMetricSeverity) {
         switch severity {
         case .normal:
-            fillColor = metric == .memory ? .systemGreen : .controlAccentColor
+            fillColor = metric == .memory || metric == .network ? .systemGreen : .controlAccentColor
         case .warning:
             fillColor = .systemYellow
         case .critical:
@@ -745,6 +719,35 @@ private extension SystemResourceMetric {
             return "CPU"
         case .gpu:
             return "GPU"
+        case .network:
+            return "NET"
         }
+    }
+
+    var controlWidth: CGFloat {
+        switch self {
+        case .memory:
+            return 170
+        case .network:
+            return 130
+        case .cpu, .gpu:
+            return 125
+        }
+    }
+
+    /// Network shows a status dot (the "track" at full fill) instead of a usage bar.
+    var trackWidth: CGFloat {
+        switch self {
+        case .memory:
+            return 76
+        case .network:
+            return 8
+        case .cpu, .gpu:
+            return 54
+        }
+    }
+
+    var trackHeight: CGFloat {
+        self == .network ? 8 : 10
     }
 }

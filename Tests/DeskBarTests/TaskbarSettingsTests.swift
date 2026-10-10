@@ -24,6 +24,8 @@ struct TaskbarSettingsTests {
         #expect(settings.showSystemResourceMemoryMetric)
         #expect(settings.showSystemResourceCPUMetric)
         #expect(settings.showSystemResourceGPUMetric)
+        #expect(settings.showSystemResourceNetworkMetric)
+        #expect(settings.systemResourceWidgetLocation == .taskbar)
         #expect(settings.systemResourceWidgetCollapsed == false)
         #expect(settings.systemResourceWidgetPinnedDisplayID == nil)
         #expect(settings.showSessionManagerWidget)
@@ -70,6 +72,8 @@ struct TaskbarSettingsTests {
         settings.showSystemResourceMemoryMetric = false
         settings.showSystemResourceCPUMetric = false
         settings.showSystemResourceGPUMetric = true
+        settings.showSystemResourceNetworkMetric = false
+        settings.systemResourceWidgetLocation = .menuBar
         settings.systemResourceWidgetCollapsed = true
         settings.systemResourceWidgetPinnedDisplayID = 12345
         settings.showSessionManagerWidget = false
@@ -85,6 +89,8 @@ struct TaskbarSettingsTests {
         #expect(settings.showSystemResourceMemoryMetric == false)
         #expect(settings.showSystemResourceCPUMetric == false)
         #expect(settings.showSystemResourceGPUMetric)
+        #expect(settings.showSystemResourceNetworkMetric == false)
+        #expect(settings.systemResourceWidgetLocation == .menuBar)
         #expect(settings.systemResourceWidgetCollapsed)
         #expect(settings.systemResourceWidgetPinnedDisplayID == 12345)
         #expect(settings.showSessionManagerWidget == false)
@@ -128,4 +134,33 @@ struct TaskbarSettingsTests {
         #expect(settings.maxTaskWidth == TaskbarSettings.defaultMaxTaskWidth)
         #expect(settings.thumbnailSize == TaskbarSettings.defaultThumbnailSize)
     }
+}
+
+@Test
+func systemResourceWidgetLocationRoutesBetweenTaskbarAndMenuBar() {
+    let suiteName = "TaskbarSettingsTests.location.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer {
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    let settings = TaskbarSettings(defaults: defaults)
+    #expect(settings.showsSystemResourceWidgetInTaskbar)
+    #expect(settings.showsSystemResourceWidgetInMenuBar == false)
+
+    settings.systemResourceWidgetLocation = .menuBar
+    #expect(settings.showsSystemResourceWidgetInTaskbar == false)
+    #expect(settings.showsSystemResourceWidgetInMenuBar)
+
+    settings.showSystemResourceMemoryMetric = false
+    settings.showSystemResourceCPUMetric = false
+    settings.showSystemResourceGPUMetric = false
+    #expect(settings.showsSystemResourceWidgetInMenuBar)
+    settings.showSystemResourceNetworkMetric = false
+    #expect(settings.hasEnabledSystemResourceMetric == false)
+    #expect(settings.showsSystemResourceWidgetInMenuBar == false)
+
+    settings.showSystemResourceNetworkMetric = true
+    settings.showSystemResourceWidget = false
+    #expect(settings.showsSystemResourceWidgetInMenuBar == false)
 }

@@ -20,6 +20,11 @@ enum DeskBarLayoutMode: String, CaseIterable {
     case compactGlass
 }
 
+enum SystemResourceWidgetLocation: String, CaseIterable {
+    case taskbar
+    case menuBar
+}
+
 enum AppsLauncherShortcut: String, CaseIterable {
     case commandTap
     case controlOptionReturn
@@ -105,6 +110,14 @@ class TaskbarSettings: ObservableObject {
 
     @Published var showSystemResourceGPUMetric: Bool {
         didSet { defaults.set(showSystemResourceGPUMetric, forKey: "showSystemResourceGPUMetric") }
+    }
+
+    @Published var showSystemResourceNetworkMetric: Bool {
+        didSet { defaults.set(showSystemResourceNetworkMetric, forKey: "showSystemResourceNetworkMetric") }
+    }
+
+    @Published var systemResourceWidgetLocation: SystemResourceWidgetLocation {
+        didSet { defaults.set(systemResourceWidgetLocation.rawValue, forKey: "systemResourceWidgetLocation") }
     }
 
     @Published var systemResourceWidgetCollapsed: Bool {
@@ -210,6 +223,10 @@ class TaskbarSettings: ObservableObject {
         showSystemResourceMemoryMetric = defaults.object(forKey: "showSystemResourceMemoryMetric") as? Bool ?? true
         showSystemResourceCPUMetric = defaults.object(forKey: "showSystemResourceCPUMetric") as? Bool ?? true
         showSystemResourceGPUMetric = defaults.object(forKey: "showSystemResourceGPUMetric") as? Bool ?? true
+        showSystemResourceNetworkMetric = defaults.object(forKey: "showSystemResourceNetworkMetric") as? Bool ?? true
+        systemResourceWidgetLocation = SystemResourceWidgetLocation(
+            rawValue: defaults.string(forKey: "systemResourceWidgetLocation") ?? ""
+        ) ?? .taskbar
         systemResourceWidgetCollapsed = defaults.object(forKey: "systemResourceWidgetCollapsed") as? Bool ?? false
         if let pinnedDisplayID = defaults.object(forKey: "systemResourceWidgetPinnedDisplayID") as? NSNumber {
             systemResourceWidgetPinnedDisplayID = CGDirectDisplayID(pinnedDisplayID.uint32Value)
@@ -234,6 +251,21 @@ class TaskbarSettings: ObservableObject {
         animateSessionManagerActivity = defaults.object(forKey: "animateSessionManagerActivity") as? Bool ?? false
         enableSessionManagerTerminalActions = defaults.object(forKey: "enableSessionManagerTerminalActions") as? Bool ?? true
         showSessionManagerActionButton = defaults.object(forKey: "showSessionManagerActionButton") as? Bool ?? true
+    }
+
+    var hasEnabledSystemResourceMetric: Bool {
+        showSystemResourceMemoryMetric ||
+            showSystemResourceCPUMetric ||
+            showSystemResourceGPUMetric ||
+            showSystemResourceNetworkMetric
+    }
+
+    var showsSystemResourceWidgetInTaskbar: Bool {
+        showSystemResourceWidget && systemResourceWidgetLocation == .taskbar
+    }
+
+    var showsSystemResourceWidgetInMenuBar: Bool {
+        showSystemResourceWidget && systemResourceWidgetLocation == .menuBar && hasEnabledSystemResourceMetric
     }
 
     func resetAppearanceSlidersToDefaults() {

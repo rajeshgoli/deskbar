@@ -628,6 +628,13 @@ final class TaskbarContentView: NSView {
             }
             .store(in: &cancellables)
 
+        settings.$systemResourceWidgetLocation
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.schedulePreferredWidthNotification()
+            }
+            .store(in: &cancellables)
+
         let workspaceNotifications = NSWorkspace.shared.notificationCenter
         let notificationNames: [Notification.Name] = [
             NSWorkspace.didActivateApplicationNotification,

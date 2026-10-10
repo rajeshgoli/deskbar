@@ -50,6 +50,8 @@ final class SettingsView: NSView {
     private let showSystemResourceMemoryMetricCheckbox = NSButton(checkboxWithTitle: "Memory pressure", target: nil, action: nil)
     private let showSystemResourceCPUMetricCheckbox = NSButton(checkboxWithTitle: "CPU usage", target: nil, action: nil)
     private let showSystemResourceGPUMetricCheckbox = NSButton(checkboxWithTitle: "GPU usage", target: nil, action: nil)
+    private let showSystemResourceNetworkMetricCheckbox = NSButton(checkboxWithTitle: "Network speed and Ethernet health", target: nil, action: nil)
+    private let systemResourceWidgetLocationPopupButton = NSPopUpButton()
     private let systemResourceWidgetDisplayPopupButton = NSPopUpButton()
     private let showSessionManagerWidgetCheckbox = NSButton(checkboxWithTitle: "Show SM widget", target: nil, action: nil)
     private let sessionManagerWidgetDisplayPopupButton = NSPopUpButton()
@@ -113,6 +115,7 @@ final class SettingsView: NSView {
         dockModePopupButton.addItems(withTitles: ["Independent", "Auto-Hide Dock", "Hide Dock"])
         layoutModePopupButton.addItems(withTitles: ["Full Width", "Full Width Glass", "Compact Centered", "Compact Glass"])
         appsLauncherShortcutPopupButton.addItems(withTitles: ["Control-Option-Return", "Option-Space", "Control-Option-Space", "Tap Command"])
+        systemResourceWidgetLocationPopupButton.addItems(withTitles: ["DeskBar Taskbar", "Menu Bar"])
         configureWidgetDisplayPopupButton()
         configureSessionManagerWidgetDisplayPopupButton()
         configureLauncherTableView()
@@ -160,10 +163,12 @@ final class SettingsView: NSView {
         widgetsTab.label = "Widgets"
         widgetsTab.view = makeFormView(rows: [
             makeCheckboxRow(showSystemResourceWidgetCheckbox),
+            makeLabeledControlRow(label: "Location", control: systemResourceWidgetLocationPopupButton),
             makeLabeledControlRow(label: "Show on", control: systemResourceWidgetDisplayPopupButton),
             makeCheckboxRow(showSystemResourceMemoryMetricCheckbox),
             makeCheckboxRow(showSystemResourceCPUMetricCheckbox),
             makeCheckboxRow(showSystemResourceGPUMetricCheckbox),
+            makeCheckboxRow(showSystemResourceNetworkMetricCheckbox),
             makeCheckboxRow(showSessionManagerWidgetCheckbox),
             makeLabeledControlRow(label: "SM widget show on", control: sessionManagerWidgetDisplayPopupButton)
         ])
@@ -366,6 +371,12 @@ final class SettingsView: NSView {
 
         showSystemResourceGPUMetricCheckbox.target = self
         showSystemResourceGPUMetricCheckbox.action = #selector(showSystemResourceGPUMetricChanged(_:))
+
+        showSystemResourceNetworkMetricCheckbox.target = self
+        showSystemResourceNetworkMetricCheckbox.action = #selector(showSystemResourceNetworkMetricChanged(_:))
+
+        systemResourceWidgetLocationPopupButton.target = self
+        systemResourceWidgetLocationPopupButton.action = #selector(systemResourceWidgetLocationChanged(_:))
 
         systemResourceWidgetDisplayPopupButton.target = self
         systemResourceWidgetDisplayPopupButton.action = #selector(systemResourceWidgetDisplayChanged(_:))
@@ -591,6 +602,21 @@ final class SettingsView: NSView {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
                 self?.showSystemResourceGPUMetricCheckbox.state = value ? .on : .off
+            }
+            .store(in: &cancellables)
+
+        settings.$showSystemResourceNetworkMetric
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.showSystemResourceNetworkMetricCheckbox.state = value ? .on : .off
+            }
+            .store(in: &cancellables)
+
+        settings.$systemResourceWidgetLocation
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.systemResourceWidgetLocationPopupButton.selectItem(at: value == .menuBar ? 1 : 0)
+                self?.updateWidgetControlsState()
             }
             .store(in: &cancellables)
 
@@ -982,10 +1008,13 @@ final class SettingsView: NSView {
 
     private func updateWidgetControlsState() {
         let isEnabled = settings.showSystemResourceWidget
-        systemResourceWidgetDisplayPopupButton.isEnabled = isEnabled
+        systemResourceWidgetLocationPopupButton.isEnabled = isEnabled
+        // Display pinning only applies to the taskbar; the menu bar item follows macOS.
+        systemResourceWidgetDisplayPopupButton.isEnabled = settings.showsSystemResourceWidgetInTaskbar
         showSystemResourceMemoryMetricCheckbox.isEnabled = isEnabled
         showSystemResourceCPUMetricCheckbox.isEnabled = isEnabled
         showSystemResourceGPUMetricCheckbox.isEnabled = isEnabled
+        showSystemResourceNetworkMetricCheckbox.isEnabled = isEnabled
 
         let isSMWidgetEnabled = settings.enableSessionManagerPlugin && settings.showSessionManagerWidget
         showSessionManagerWidgetCheckbox.isEnabled = settings.enableSessionManagerPlugin
@@ -1302,6 +1331,16 @@ final class SettingsView: NSView {
     @objc
     private func showSystemResourceGPUMetricChanged(_ sender: NSButton) {
         settings.showSystemResourceGPUMetric = sender.state == .on
+    }
+
+    @objc
+    private func showSystemResourceNetworkMetricChanged(_ sender: NSButton) {
+        settings.showSystemResourceNetworkMetric = sender.state == .on
+    }
+
+    @objc
+    private func systemResourceWidgetLocationChanged(_ sender: NSPopUpButton) {
+        settings.systemResourceWidgetLocation = sender.indexOfSelectedItem == 1 ? .menuBar : .taskbar
     }
 
     @objc

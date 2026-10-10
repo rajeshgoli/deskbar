@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var appStateMonitor: AppStateMonitor?
     private var smPluginService: SMPluginService?
     private var systemResourceMonitor: SystemResourceMonitor?
+    private var systemResourceStatusItemController: SystemResourceStatusItemController?
     private var thumbnailService: ThumbnailService?
     private var windowLayoutSnapshotManager: WindowLayoutSnapshotManager?
     private var windowSwitcherService: WindowSwitcherService?
@@ -102,6 +103,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pinnedAppManager: pinnedAppManager
         )
         configureStatusItem()
+        systemResourceStatusItemController = SystemResourceStatusItemController(
+            settings: settings,
+            monitor: systemResourceMonitor
+        )
         bindDockMode(settings: settings)
         bindSessionManagerPlugin(settings: settings, smPluginService: smPluginService)
         configureSignalHandlers()

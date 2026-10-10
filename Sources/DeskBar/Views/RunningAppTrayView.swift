@@ -154,6 +154,20 @@ final class RunningAppTrayView: NSStackView {
                 self?.rebuildIcons()
             }
             .store(in: &cancellables)
+
+        settings.$showSystemResourceNetworkMetric
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.rebuildIcons()
+            }
+            .store(in: &cancellables)
+
+        settings.$systemResourceWidgetLocation
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.rebuildIcons()
+            }
+            .store(in: &cancellables)
     }
 
     func refresh() {
@@ -468,13 +482,9 @@ final class RunningAppTrayView: NSStackView {
 
     private var shouldShowCollapsedSystemResourceWidget: Bool {
         guard
-            settings.showSystemResourceWidget,
+            settings.showsSystemResourceWidgetInTaskbar,
             settings.systemResourceWidgetCollapsed,
-            [
-                settings.showSystemResourceMemoryMetric,
-                settings.showSystemResourceCPUMetric,
-                settings.showSystemResourceGPUMetric
-            ].contains(true)
+            settings.hasEnabledSystemResourceMetric
         else {
             return false
         }

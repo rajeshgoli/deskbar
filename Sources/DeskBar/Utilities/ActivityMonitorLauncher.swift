@@ -5,6 +5,7 @@ enum ActivityMonitorPane {
     case cpu
     case memory
     case gpu
+    case network
 }
 
 enum ActivityMonitorLauncher {
@@ -38,6 +39,8 @@ enum ActivityMonitorLauncher {
             return paneScript(commandNumber: "2")
         case .gpu:
             return historyWindowScript(menuItemTitle: "GPU History", fallbackCommandNumber: "6")
+        case .network:
+            return paneScript(commandNumber: "5")
         }
     }
 
@@ -106,7 +109,7 @@ enum ActivityMonitorLauncher {
             if pressActivityMonitorWindowMenuItem(title: "GPU History") {
                 return
             }
-        case .memory:
+        case .memory, .network:
             break
         }
 

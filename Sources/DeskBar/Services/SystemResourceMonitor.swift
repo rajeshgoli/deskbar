@@ -10,6 +10,7 @@ final class SystemResourceMonitor: ObservableObject {
     private let sampleInterval: TimeInterval
     private var timer: Timer?
     private var previousCPUTicks: ProcessorTicks?
+    private let networkMonitor = NetworkMonitor()
 
     init(sampleInterval: TimeInterval = 2.0) {
         self.sampleInterval = sampleInterval
@@ -30,7 +31,8 @@ final class SystemResourceMonitor: ObservableObject {
             memoryUsedBytes: memory.usedBytes,
             memoryTotalBytes: memory.totalBytes,
             cpuPercent: sampleCPUPercent(),
-            gpuPercent: sampleGPUPercent()
+            gpuPercent: sampleGPUPercent(),
+            network: networkMonitor.sample()
         )
     }
 
