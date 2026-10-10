@@ -61,6 +61,12 @@ final class SystemResourceStatusItemController: NSObject, NSMenuDelegate {
             statusItem.menu = menu
 
             let statusView = SystemResourceStatusView()
+            statusView.heightDidChange = { [weak self] in
+                guard let self else {
+                    return
+                }
+                self.render(self.monitor.snapshot)
+            }
             if let button = statusItem.button {
                 statusView.frame = button.bounds
                 statusView.autoresizingMask = [.width, .height]
@@ -176,16 +182,33 @@ final class SystemResourceStatusItemController: NSObject, NSMenuDelegate {
     }
 }
 
-/// Two-line readout sized for the menu bar: label over value for each percentage metric, and
-/// upload over download beside a health dot for network.
+/// Single-line menu bar readout: "MEM 33G  CPU 8%  GPU 11%  ● ↓24K ↑25K", each label beside
+/// its value and the dot showing network health.
 final class SystemResourceStatusView: NSView {
-    private static let horizontalPadding: CGFloat = 4
-    private static let columnSpacing: CGFloat = 7
-    private static let dotSize: CGFloat = 6
-    private static let dotSpacing: CGFloat = 3
-    private static let labelFont = NSFont.systemFont(ofSize: 8, weight: .semibold)
-    private static let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
-    private static let rateFont = NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium)
+    /// Fonts and spacing scaled to the menu bar's height: 22pt on older macOS, 30pt or more on
+    /// macOS 26 and notched displays, where fixed small fonts look cramped.
+    private struct Layout {
+        let horizontalPadding: CGFloat
+        let columnSpacing: CGFloat
+        let dotSize: CGFloat
+        let dotSpacing: CGFloat
+        let labelSpacing: CGFloat
+        let labelFont: NSFont
+        let valueFont: NSFont
+
+        init(barHeight: CGFloat) {
+            let height = max(barHeight, 22)
+            horizontalPadding = round(height * 0.2)
+            columnSpacing = round(height * 0.34)
+            dotSize = round(height * 0.24)
+            dotSpacing = round(height * 0.14)
+            labelSpacing = round(height * 0.12)
+            labelFont = NSFont.systemFont(ofSize: max(8, round(height * 0.32 * 2) / 2), weight: .bold)
+            valueFont = NSFont.monospacedDigitSystemFont(ofSize: max(11, round(height * 0.45 * 2) / 2), weight: .semibold)
+        }
+    }
+
+    private static let fallbackBarHeight: CGFloat = 24
 
     var metrics: [SystemResourceMetric] = [] {
         didSet {
@@ -209,6 +232,22 @@ final class SystemResourceStatusView: NSView {
         true
     }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        let heightChanged = newSize.height != frame.height
+        super.setFrameSize(newSize)
+        if heightChanged {
+            needsDisplay = true
+            heightDidChange?()
+        }
+    }
+
+    /// Called when the status bar resizes the view, so the item length can follow the new fonts.
+    var heightDidChange: (() -> Void)?
+
+    private var layout: Layout {
+        Layout(barHeight: bounds.height > 0 ? bounds.height : Self.fallbackBarHeight)
+    }
+
     // Clicks belong to the status bar button underneath, which opens the menu.
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
@@ -219,27 +258,29 @@ final class SystemResourceStatusView: NSView {
             return 0
         }
 
-        let columns = metrics.map(Self.columnWidth(for:))
-        return Self.horizontalPadding * 2 +
+        let layout = layout
+        let columns = metrics.map { Self.columnWidth(for: $0, layout: layout) }
+        return layout.horizontalPadding * 2 +
             columns.reduce(0, +) +
-            CGFloat(columns.count - 1) * Self.columnSpacing
+            CGFloat(columns.count - 1) * layout.columnSpacing
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        var x = Self.horizontalPadding
+        let layout = layout
+        var x = layout.horizontalPadding
         for metric in metrics {
-            let width = Self.columnWidth(for: metric)
+            let width = Self.columnWidth(for: metric, layout: layout)
             let column = NSRect(x: x, y: 0, width: width, height: bounds.height)
             if metric == .network {
-                drawNetworkColumn(in: column)
+                drawNetworkColumn(in: column, layout: layout)
             } else {
-                drawPercentColumn(metric, in: column)
+                drawPercentColumn(metric, in: column, layout: layout)
             }
-            x += width + Self.columnSpacing
+            x += width + layout.columnSpacing
         }
     }
 
-    private func drawPercentColumn(_ metric: SystemResourceMetric, in rect: NSRect) {
+    private func drawPercentColumn(_ metric: SystemResourceMetric, in rect: NSRect, layout: Layout) {
         let value: String
         let severity: SystemResourceMetricSeverity
         switch metric {
@@ -262,97 +303,97 @@ final class SystemResourceStatusView: NSView {
         }
 
         let label = NSAttributedString(string: metric.menuBarLabel, attributes: [
-            .font: Self.labelFont,
-            .foregroundColor: NSColor.secondaryLabelColor
+            .font: layout.labelFont,
+            .foregroundColor: NSColor.labelColor.withAlphaComponent(0.7)
         ])
         let valueText = NSAttributedString(string: value, attributes: [
-            .font: Self.valueFont,
-            .foregroundColor: Self.textColor(for: severity)
+            .font: layout.valueFont,
+            .foregroundColor: valueColor(for: severity, metric: metric)
         ])
-        drawStacked(top: label, bottom: valueText, in: rect)
+        drawInline(label: label, value: valueText, in: rect, layout: layout)
     }
 
-    private func drawNetworkColumn(in rect: NSRect) {
+    /// Draws label then value on a shared baseline, vertically centred on the value's cap height.
+    /// The value is left-aligned in a slot sized for its widest form, so the item never jitters.
+    private func drawInline(label: NSAttributedString, value: NSAttributedString, in rect: NSRect, layout: Layout) {
+        let baseline = round(rect.midY + layout.valueFont.capHeight / 2)
+        label.draw(at: NSPoint(x: rect.minX, y: baseline - layout.labelFont.ascender))
+        let valueX = rect.minX + ceil(label.size().width) + layout.labelSpacing
+        value.draw(at: NSPoint(x: valueX, y: baseline - layout.valueFont.ascender))
+    }
+
+    private func drawNetworkColumn(in rect: NSRect, layout: Layout) {
         let network = snapshot.network
         let dotRect = NSRect(
             x: rect.minX,
-            y: rect.midY - Self.dotSize / 2,
-            width: Self.dotSize,
-            height: Self.dotSize
+            y: rect.midY - layout.dotSize / 2,
+            width: layout.dotSize,
+            height: layout.dotSize
         )
-        Self.dotColor(for: SystemResourceFormatting.severity(for: network)).setFill()
+        valueColor(for: SystemResourceFormatting.severity(for: network), metric: .network).setFill()
         NSBezierPath(ovalIn: dotRect).fill()
 
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: Self.rateFont,
-            .foregroundColor: NSColor.labelColor
+        let arrowAttributes: [NSAttributedString.Key: Any] = [
+            .font: layout.labelFont,
+            .foregroundColor: NSColor.labelColor.withAlphaComponent(0.7)
         ]
-        let upload = NSAttributedString(
-            string: "↑" + SystemResourceFormatting.rateString(network.uploadBytesPerSecond),
-            attributes: attributes
-        )
-        let download = NSAttributedString(
-            string: "↓" + SystemResourceFormatting.rateString(network.downloadBytesPerSecond),
-            attributes: attributes
-        )
-        let textInset = Self.dotSize + Self.dotSpacing
-        let textRect = NSRect(x: rect.minX + textInset, y: rect.minY, width: rect.width - textInset, height: rect.height)
-        drawStacked(top: upload, bottom: download, in: textRect, alignment: .left)
-    }
-
-    private func drawStacked(
-        top: NSAttributedString,
-        bottom: NSAttributedString,
-        in rect: NSRect,
-        alignment: NSTextAlignment = .center
-    ) {
-        let topSize = top.size()
-        let bottomSize = bottom.size()
-        let lineGap: CGFloat = -1
-        let totalHeight = topSize.height + lineGap + bottomSize.height
-        var y = rect.midY - totalHeight / 2
-
-        for (text, size) in [(top, topSize), (bottom, bottomSize)] {
-            let x = alignment == .center ? rect.midX - size.width / 2 : rect.minX
-            text.draw(at: NSPoint(x: x, y: y))
-            y += size.height + lineGap
+        let valueAttributes: [NSAttributedString.Key: Any] = [
+            .font: layout.valueFont,
+            .foregroundColor: valueColor(for: SystemResourceFormatting.severity(for: network), metric: .network)
+        ]
+        let rates = [
+            ("↓", network.downloadBytesPerSecond),
+            ("↑", network.uploadBytesPerSecond)
+        ]
+        var x = rect.minX + layout.dotSize + layout.dotSpacing
+        for (arrow, rate) in rates {
+            let slot = NSRect(x: x, y: rect.minY, width: Self.rateSlotWidth(layout: layout), height: rect.height)
+            drawInline(
+                label: NSAttributedString(string: arrow, attributes: arrowAttributes),
+                value: NSAttributedString(string: SystemResourceFormatting.rateString(rate), attributes: valueAttributes),
+                in: slot,
+                layout: layout
+            )
+            x = slot.maxX + layout.labelSpacing * 2
         }
     }
 
-    private static func columnWidth(for metric: SystemResourceMetric) -> CGFloat {
+    /// Width of one "↓888M" slot; rate strings never exceed four characters.
+    private static func rateSlotWidth(layout: Layout) -> CGFloat {
+        let arrowWidth = NSAttributedString(string: "↓", attributes: [.font: layout.labelFont]).size().width
+        let valueWidth = NSAttributedString(string: "888M", attributes: [.font: layout.valueFont]).size().width
+        return ceil(arrowWidth) + layout.labelSpacing + ceil(valueWidth)
+    }
+
+    private static func columnWidth(for metric: SystemResourceMetric, layout: Layout) -> CGFloat {
         switch metric {
         case .network:
-            let rateWidth = NSAttributedString(string: "↓888M", attributes: [.font: rateFont]).size().width
-            return ceil(dotSize + dotSpacing + rateWidth)
+            return layout.dotSize + layout.dotSpacing + rateSlotWidth(layout: layout) * 2 + layout.labelSpacing * 2
         case .memory, .cpu, .gpu:
             let template = metric == .memory ? "888G" : "100%"
-            let valueWidth = NSAttributedString(string: template, attributes: [.font: valueFont]).size().width
-            let labelWidth = NSAttributedString(string: metric.menuBarLabel, attributes: [.font: labelFont]).size().width
-            return ceil(max(valueWidth, labelWidth))
+            let valueWidth = NSAttributedString(string: template, attributes: [.font: layout.valueFont]).size().width
+            let labelWidth = NSAttributedString(string: metric.menuBarLabel, attributes: [.font: layout.labelFont]).size().width
+            return ceil(labelWidth) + layout.labelSpacing + ceil(valueWidth)
         }
     }
 
-    private static func textColor(for severity: SystemResourceMetricSeverity) -> NSColor {
-        switch severity {
-        case .warning:
-            return .systemOrange
-        case .critical:
-            return .systemRed
-        case .normal, .unknown:
-            return .labelColor
-        }
-    }
-
-    private static func dotColor(for severity: SystemResourceMetricSeverity) -> NSColor {
+    /// Matches the taskbar widget's bar colours: green for memory and network, accent for CPU and
+    /// GPU, yellow then red as usage climbs. Text needs more contrast than a bar, so a dark menu
+    /// bar uses cyan instead of the accent, and a light one uses orange instead of yellow.
+    private func valueColor(for severity: SystemResourceMetricSeverity, metric: SystemResourceMetric) -> NSColor {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         switch severity {
         case .normal:
-            return .systemGreen
+            guard metric == .cpu || metric == .gpu else {
+                return .systemGreen
+            }
+            return isDark ? .systemCyan : .controlAccentColor
         case .warning:
-            return .systemOrange
+            return isDark ? .systemYellow : .systemOrange
         case .critical:
             return .systemRed
         case .unknown:
-            return .tertiaryLabelColor
+            return .secondaryLabelColor
         }
     }
 }

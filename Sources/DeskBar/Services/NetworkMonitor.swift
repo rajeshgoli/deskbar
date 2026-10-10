@@ -29,7 +29,10 @@ final class NetworkMonitor {
     init() {
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let isOnline = path.status == .satisfied
-            let primary = Self.primaryInterface(from: path.availableInterfaces)
+            let primary = Self.primaryInterface(
+                from: path.availableInterfaces,
+                isUsed: { path.usesInterfaceType($0) }
+            )
             Task { @MainActor [weak self] in
                 self?.hasReceivedPath = true
                 self?.isOnline = isOnline
@@ -113,16 +116,20 @@ final class NetworkMonitor {
         previousInterfaceName = nil
     }
 
-    /// Picks the first physical interface in the path's preference order, so a VPN tunnel
-    /// (`utun`, type `.other`) reports the ethernet or Wi-Fi link it rides on.
-    private nonisolated static func primaryInterface(from interfaces: [NWInterface]) -> PrimaryInterface? {
+    /// Picks the physical interface the path actually routes over, so a dormant Wi-Fi link on a
+    /// dual-homed Mac is not sampled and a VPN tunnel (`utun`, type `.other`) reports the
+    /// ethernet or Wi-Fi link it rides on.
+    private nonisolated static func primaryInterface(
+        from interfaces: [NWInterface],
+        isUsed: (NWInterface.InterfaceType) -> Bool
+    ) -> PrimaryInterface? {
+        let physicalTypes: [NWInterface.InterfaceType] = [.wiredEthernet, .wifi, .cellular]
+        let usedType = physicalTypes.first(where: isUsed)
         let physical = interfaces.first { interface in
-            switch interface.type {
-            case .wiredEthernet, .wifi, .cellular:
-                return true
-            default:
-                return false
+            guard let usedType else {
+                return physicalTypes.contains(interface.type)
             }
+            return interface.type == usedType
         }
 
         guard let interface = physical ?? interfaces.first(where: { $0.type != .loopback }) else {
