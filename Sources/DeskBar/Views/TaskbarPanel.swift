@@ -50,6 +50,8 @@ final class TaskbarPanel: NSPanel {
         level = .statusBar
         isFloatingPanel = true
         hidesOnDeactivate = false
+        // The taskbar stays nonactivating, but its app-name tooltips must work over other apps.
+        allowsToolTipsWhenApplicationIsInactive = true
         backgroundColor = .clear
         isMovableByWindowBackground = false
         isOpaque = false
