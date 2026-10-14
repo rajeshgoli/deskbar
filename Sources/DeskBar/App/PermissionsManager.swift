@@ -5,6 +5,12 @@ import Combine
 final class PermissionsManager: ObservableObject {
     @Published private(set) var isAccessibilityGranted: Bool
 
+    static func accessibilityPermissionName(
+        majorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+    ) -> String {
+        majorVersion >= 27 ? "Device Control and Data Access" : "Accessibility"
+    }
+
     static let accessibilitySettingsURLs: [URL] = [
         URL(
             string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"

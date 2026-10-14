@@ -334,8 +334,9 @@ final class TaskbarContentView: NSView {
             rootStackView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
-        bannerButton.title = "Accessibility permission required — Click to grant (you may need to add DeskBar manually in System Settings > Privacy & Security > Accessibility)"
-        bannerButton.toolTip = bannerButton.title
+        let permissionName = PermissionsManager.accessibilityPermissionName()
+        bannerButton.title = "\(permissionName) permission required — Click to open System Settings"
+        bannerButton.toolTip = "Enable DeskBar in System Settings > Privacy & Security > \(permissionName). If it is already enabled but access is denied after an update, remove DeskBar from the list and add /Applications/DeskBar.app again."
         bannerButton.isBordered = false
         bannerButton.bezelStyle = .regularSquare
         bannerButton.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
