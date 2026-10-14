@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 enum LauncherApplicationActivator {
     static func launch(bundleIdentifier: String, applicationURL: URL?) {
@@ -84,7 +85,25 @@ enum LauncherApplicationActivator {
         )
     }
 
-    static func hasCGWindows(for application: NSRunningApplication) -> Bool {
+    static func hasApplicationWindows(
+        for application: NSRunningApplication,
+        accessibilityService: AccessibilityService
+    ) -> Bool {
+        let accessibilityWindows = AXIsProcessTrusted()
+            ? accessibilityService.hasWindows(for: application)
+            : nil
+        return hasApplicationWindows(
+            accessibilityWindows: accessibilityWindows,
+            cgWindows: hasCGWindows(for: application)
+        )
+    }
+
+    static func hasApplicationWindows(accessibilityWindows: Bool?, cgWindows: @autoclosure () -> Bool) -> Bool {
+        // WindowServer retains offscreen app surfaces after the last user window closes. They must not override a successful empty AX response.
+        accessibilityWindows ?? cgWindows()
+    }
+
+    private static func hasCGWindows(for application: NSRunningApplication) -> Bool {
         guard
             let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]
         else {

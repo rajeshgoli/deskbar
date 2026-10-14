@@ -535,14 +535,10 @@ private final class LauncherZoneButtonView: NSView, NSDraggingSource {
             return nil
         }
 
-        if AXIsProcessTrusted() {
-            let windows = accessibilityService.enumerateWindows(for: runningApplication)
-            if !windows.isEmpty {
-                return true
-            }
-        }
-
-        return LauncherApplicationActivator.hasCGWindows(for: runningApplication)
+        return LauncherApplicationActivator.hasApplicationWindows(
+            for: runningApplication,
+            accessibilityService: accessibilityService
+        )
     }
 
     private func activateMostRecentWindow() {

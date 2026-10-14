@@ -88,6 +88,26 @@ final class AccessibilityService {
     }
 
     func windowEnumeration(for application: NSRunningApplication) -> AXWindowEnumeration {
+        let (error, windows) = queryWindows(for: application)
+
+        switch error {
+        case .success:
+            return .windows(windows)
+        case _ where Self.isTransientEnumerationFailure(error):
+            return .unavailable
+        default:
+            // Lasting failures must clear cached taskbar windows.
+            return .windows([])
+        }
+    }
+
+    /// A successful empty response means the app needs reopening. A failed query leaves window presence unknown.
+    func hasWindows(for application: NSRunningApplication) -> Bool? {
+        let (error, windows) = queryWindows(for: application)
+        return error == .success ? !windows.isEmpty : nil
+    }
+
+    private func queryWindows(for application: NSRunningApplication) -> (AXError, [AXUIElement]) {
         let appElement = AXUIElementCreateApplication(application.processIdentifier)
         var windowsValue: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(
@@ -96,15 +116,8 @@ final class AccessibilityService {
             &windowsValue
         )
 
-        switch error {
-        case .success:
-            break
-        case _ where Self.isTransientEnumerationFailure(error):
-            return .unavailable
-        default:
-            // .attributeUnsupported / .noValue (no window list), .apiDisabled (permission
-            // revoked), .invalidUIElement (the app is gone), … — all authoritative.
-            return .windows([])
+        guard error == .success else {
+            return (error, [])
         }
 
         let windows = (windowsValue as? [Any])?.compactMap { value -> AXUIElement? in
@@ -116,7 +129,7 @@ final class AccessibilityService {
             return unsafeBitCast(cfValue, to: AXUIElement.self)
         } ?? []
 
-        return .windows(windows.filter(isEligibleWindow))
+        return (.success, windows.filter(isEligibleWindow))
     }
 
     @discardableResult
