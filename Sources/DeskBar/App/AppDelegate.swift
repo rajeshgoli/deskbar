@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var panels: [CGDirectDisplayID: TaskbarPanel] = [:]
     private var contentViews: [CGDirectDisplayID: TaskbarContentView] = [:]
+    private var visibilityControllers: [CGDirectDisplayID: TaskbarVisibilityController] = [:]
     private var windowManager: WindowManager?
     private var permissionsManager: PermissionsManager?
     private var settings: TaskbarSettings?
@@ -25,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindowController: SettingsWindowController?
     private var statusItem: NSStatusItem?
     private var restoreWindowsMenuItem: NSMenuItem?
+    private var showTaskbarMenuItem: NSMenuItem?
     private let singleInstanceLock = SingleInstanceLock()
     private var cancellables = Set<AnyCancellable>()
     private var signalSources: [DispatchSourceSignal] = []
@@ -136,6 +138,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc
+    private func showTaskbar(_ sender: Any?) {
+        visibilityControllers.values.forEach { $0.show() }
+    }
+
+    private func updateShowTaskbarMenuItem() {
+        showTaskbarMenuItem?.isEnabled = visibilityControllers.values.contains { $0.isManuallyHidden }
+    }
+
+    @objc
     private func restoreWindowsFromLastSleep(_ sender: Any?) {
         windowLayoutSnapshotManager?.restoreLatestSnapshot(manual: true)
         updateRestoreWindowsMenuItem()
@@ -210,6 +221,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         settingsItem.target = self
         menu.addItem(settingsItem)
+        let showTaskbarItem = NSMenuItem(title: "Show DeskBar", action: #selector(showTaskbar(_:)), keyEquivalent: "")
+        showTaskbarItem.target = self
+        menu.addItem(showTaskbarItem)
+        showTaskbarMenuItem = showTaskbarItem
+        updateShowTaskbarMenuItem()
         menu.addItem(.separator())
 
         let restoreWindowsItem = NSMenuItem(
@@ -372,16 +388,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             contentViews[displayID] = contentView
             panels[displayID] = panel
+            let visibility = TaskbarVisibilityController(panel: panel, settings: settings)
+            visibility.visibilityDidChange = { [weak self] in self?.updateShowTaskbarMenuItem() }
+            visibilityControllers[displayID] = visibility
         }
 
         let staleDisplayIDs = Set(panels.keys).subtracting(targetIDs)
         for displayID in staleDisplayIDs {
+            visibilityControllers.removeValue(forKey: displayID)
             panels[displayID]?.orderOut(nil)
             panels.removeValue(forKey: displayID)
             contentViews.removeValue(forKey: displayID)
         }
 
         windowManager.activeDisplayIDs = Set(panels.keys)
+        updateShowTaskbarMenuItem()
     }
 
     private func refreshPanelsForCurrentConfiguration() {
@@ -397,20 +418,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if settings.showOverFullScreenApps {
-            panels.values.forEach { $0.orderFront(nil) }
+            visibilityControllers.values.forEach { $0.setAvailable(true) }
             return
         }
 
-        for (displayID, panel) in panels {
+        for displayID in panels.keys {
             guard let screen = ScreenGeometry.screen(for: displayID) else {
-                panel.orderOut(nil)
+                visibilityControllers[displayID]?.setAvailable(false)
                 continue
             }
 
             if windowManager.hasFullScreenWindow(on: screen) {
-                panel.orderOut(nil)
+                visibilityControllers[displayID]?.setAvailable(false)
             } else {
-                panel.orderFront(nil)
+                visibilityControllers[displayID]?.setAvailable(true)
             }
         }
     }

@@ -125,6 +125,10 @@ Rather than work around a buggy third-party app with a suspicious bundle ID, we'
 
 **Window level: `.statusBar` (25)** -- Above normal windows and the Dock, below system alerts. Always visible.
 
+Set `isFloatingPanel` before assigning the window level: enabling floating-panel behavior resets the level to `.floating` (3), which would put the taskbar below the Dock.
+
+The panel's carrier spans the display even in compact layouts. Unexpected window resizes are normalized back to the current display frame on the next main-loop turn, keeping the content and right-hand tray inside the window after AppKit or a window manager changes its size.
+
 **Panel configuration:**
 ```swift
 level = .statusBar
@@ -262,7 +266,7 @@ The macOS Dock and DeskBar both target the screen edge. This section defines how
 {"autohide": false, "autohide-delay": 0, "timestamp": "2026-03-26T..."}
 ```
 
-**Mode: `hidden`.** Same as `autoHide`, plus sets `autohide-delay` to 1000 (effectively invisible). Prior state file captures original `autohide-delay` value.
+**Mode: `hidden`.** Same as `autoHide`, plus sets `autohide-delay` to 1000 to suppress ordinary edge-hover reveal. Prior state file captures original `autohide-delay` value. This does not disable the Dock: Mission Control can still show it.
 
 **Dock restore — defense in depth.** This section applies only to `autoHide` and `hidden` modes, which mutate `com.apple.dock` defaults. In `independent` mode (the default), DeskBar never writes to Dock preferences and no restore logic is needed.
 
@@ -396,6 +400,8 @@ When the user manually drags a window or group to a new position in the Task Zon
 Example: the Task Zone has [Chrome-1, Terminal, Safari] in MRU order. The user drags Terminal to the rightmost position. Now [Chrome-1, Safari, Terminal*]. The user then activates Safari — the non-positioned items reorder by MRU: [Safari, Chrome-1, Terminal*]. Terminal stays put because it has `userPositioned`.
 
 ### Spaces and Full-Screen Behavior
+
+**Manual dismissal.** Behavior settings provide **Scroll to hide DeskBar: Off / Scroll down / Scroll up**, defaulting to Off. The direction follows physical mouse-wheel or finger movement independently of Natural scrolling. When enabled, the matching vertical scroll anywhere on a taskbar (including its controls) hides only that display's bar. Horizontal scrolling and momentum events do not dismiss it. Move the pointer to the display's bottom two points to reveal it, or choose **Show DeskBar** in the menu-bar menu to restore all manually hidden bars. If the pointer was already on the edge when the bar was hidden, it must leave and re-enter before revealing. A manual dismissal survives app switches and window-list refreshes. Full-screen suppression takes priority: the reveal strip is unavailable while the taskbar is suppressed, and leaving full screen preserves manual dismissal.
 
 **Cross-Space presence.** DeskBar uses `.canJoinAllSpaces` and `.stationary` in its `collectionBehavior`. This is intentional and non-negotiable — a taskbar that disappears when the user switches Spaces defeats its purpose. This is the Windows taskbar model: always present, regardless of virtual desktop.
 

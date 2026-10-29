@@ -28,6 +28,7 @@ final class SettingsView: NSView {
 
     private let startAtLoginCheckbox = NSButton(checkboxWithTitle: "Start at login", target: nil, action: nil)
     private let dockModePopupButton = NSPopUpButton()
+    private let hideScrollDirectionPopupButton = NSPopUpButton()
 
     private let taskbarHeightSlider = NSSlider(value: 40, minValue: 32, maxValue: 60, target: nil, action: nil)
     private let layoutModePopupButton = NSPopUpButton()
@@ -143,11 +144,14 @@ final class SettingsView: NSView {
         ])
 
         groupingModePopupButton.addItems(withTitles: ["Never", "Automatic", "Always"])
+        hideScrollDirectionPopupButton.addItems(withTitles: ["Off", "Scroll down", "Scroll up"])
+        hideScrollDirectionPopupButton.toolTip = "Mouse-wheel or finger direction, independent of Natural scrolling. Move to the bottom edge to show DeskBar again."
 
         let behaviorTab = NSTabViewItem(identifier: "behavior")
         behaviorTab.label = "Behavior"
         behaviorTab.view = makeFormView(rows: [
             makeLabeledControlRow(label: "Hover delay", control: hoverDelaySlider),
+            makeLabeledControlRow(label: "Scroll to hide DeskBar", control: hideScrollDirectionPopupButton),
             makeLabeledControlRow(label: "Window grouping", control: groupingModePopupButton),
             makeCheckboxRow(dragReorderCheckbox),
             makeCheckboxRow(middleClickClosesCheckbox),
@@ -327,6 +331,8 @@ final class SettingsView: NSView {
 
         dockModePopupButton.target = self
         dockModePopupButton.action = #selector(dockModeChanged(_:))
+        hideScrollDirectionPopupButton.target = self
+        hideScrollDirectionPopupButton.action = #selector(hideScrollDirectionChanged(_:))
 
         taskbarHeightSlider.target = self
         taskbarHeightSlider.action = #selector(taskbarHeightChanged(_:))
@@ -441,6 +447,14 @@ final class SettingsView: NSView {
     }
 
     private func bindSettings() {
+        settings.$taskbarHideScrollDirection
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                if let index = TaskbarHideScrollDirection.allCases.firstIndex(of: value) {
+                    self?.hideScrollDirectionPopupButton.selectItem(at: index)
+                }
+            }
+            .store(in: &cancellables)
         settings.$enableTrayIconHiding
             .receive(on: RunLoop.main)
             .sink { [weak self] value in self?.enableTrayIconHidingCheckbox.state = value ? .on : .off }
@@ -1227,6 +1241,13 @@ final class SettingsView: NSView {
     @objc
     private func startAtLoginChanged(_ sender: NSButton) {
         settings.startAtLogin = sender.state == .on
+    }
+
+    @objc
+    private func hideScrollDirectionChanged(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        guard TaskbarHideScrollDirection.allCases.indices.contains(index) else { return }
+        settings.taskbarHideScrollDirection = TaskbarHideScrollDirection.allCases[index]
     }
 
     @objc

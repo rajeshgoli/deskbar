@@ -26,6 +26,7 @@ Lightweight, native, no external dependencies. Does not modify any system settin
 - **Minimized windows stay visible** — dimmed in the taskbar (Windows-style), click to restore
 - **Settings** — configurable full-width/compact layouts, shortcuts, appearance, Dock behavior, launchers, and blacklist
 - **Dock coexistence** — three modes (independent, auto-hide, hidden) with crash-safe restore
+- **Scroll to hide** — choose Off, Scroll down, or Scroll up in Behavior settings; move the pointer to the bottom edge to reveal the taskbar, or choose Show DeskBar in the menu bar
 - **Start at login** — LaunchAgent-based, no Developer ID required
 - **Blacklist** — hide apps you don't want in the taskbar
 - **Badge dots** — best-effort notification indicators

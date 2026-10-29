@@ -7,6 +7,12 @@ enum DockMode: String, CaseIterable {
     case hidden
 }
 
+enum TaskbarHideScrollDirection: String, CaseIterable {
+    case disabled
+    case down
+    case up
+}
+
 enum WindowGroupingMode: String, CaseIterable {
     case never
     case automatic
@@ -87,6 +93,10 @@ class TaskbarSettings: ObservableObject {
 
     @Published var dockMode: DockMode {
         didSet { defaults.set(dockMode.rawValue, forKey: "dockMode") }
+    }
+
+    @Published var taskbarHideScrollDirection: TaskbarHideScrollDirection {
+        didSet { defaults.set(taskbarHideScrollDirection.rawValue, forKey: "taskbarHideScrollDirection") }
     }
 
     @Published var showOverFullScreenApps: Bool {
@@ -226,6 +236,7 @@ class TaskbarSettings: ObservableObject {
         hiddenTrayApps = defaults.dictionary(forKey: "hiddenTrayApps") as? [String: String] ?? [:]
         enableTrayIconHiding = defaults.object(forKey: "enableTrayIconHiding") as? Bool ?? true
         dockMode = DockMode(rawValue: defaults.string(forKey: "dockMode") ?? "") ?? .independent
+        taskbarHideScrollDirection = TaskbarHideScrollDirection(rawValue: defaults.string(forKey: "taskbarHideScrollDirection") ?? "") ?? .disabled
         showOverFullScreenApps = defaults.object(forKey: "showOverFullScreenApps") as? Bool ?? false
         flashAttentionIndicators = defaults.object(forKey: "flashAttentionIndicators") as? Bool ?? true
         showProgressIndicators = defaults.object(forKey: "showProgressIndicators") as? Bool ?? true
