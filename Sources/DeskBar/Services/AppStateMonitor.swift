@@ -142,7 +142,7 @@ final class AppStateMonitor: ObservableObject {
             let pid = application.processIdentifier
             let shouldInspectWindows = launchDeadlines[pid] != nil
             let windows = shouldInspectWindows && AXIsProcessTrusted()
-                ? accessibilityService.enumerateWindows(for: application)
+                ? accessibilityService.enumerateWindows(for: application, urgency: .background)
                 : []
             let resourceSample = isActivitySamplingEnabled
                 ? sampleResources(for: pid, timestamp: timestamp)

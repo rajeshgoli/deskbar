@@ -10,6 +10,55 @@ enum AXWindowEnumeration {
     case unavailable
 }
 
+/// Whether an AX request serves a click, which may wait for a slow app, or background polling
+/// on the main thread, which must not.
+enum AXRequestUrgency {
+    case interactive
+    case background
+}
+
+/// Remembers applications whose last background AX request could not complete. Several components query
+/// every app during one refresh pass; without this, an app that is still launching would cost
+/// a full messaging timeout per query instead of one per cooldown.
+final class AXUnresponsiveApplications {
+    static let shared = AXUnresponsiveApplications()
+
+    private let cooldown: TimeInterval
+    private let lock = NSLock()
+    private var lastFailureByPID: [pid_t: Date] = [:]
+
+    init(cooldown: TimeInterval = 1) {
+        self.cooldown = cooldown
+    }
+
+    func shouldSkip(_ pid: pid_t, now: Date = Date()) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let lastFailure = lastFailureByPID[pid] else {
+            return false
+        }
+
+        if now.timeIntervalSince(lastFailure) < cooldown {
+            return true
+        }
+
+        lastFailureByPID.removeValue(forKey: pid)
+        return false
+    }
+
+    func record(_ error: AXError, for pid: pid_t, now: Date = Date()) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if AccessibilityService.isTransientEnumerationFailure(error) {
+            lastFailureByPID[pid] = now
+        } else {
+            lastFailureByPID.removeValue(forKey: pid)
+        }
+    }
+}
+
 final class AccessibilityService {
     typealias AXUIElementGetWindowFunc = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
     typealias GetProcessForPIDFunc = @convention(c) (pid_t, UnsafeMutablePointer<ProcessSerialNumber>) -> OSStatus
@@ -25,6 +74,18 @@ final class AccessibilityService {
     private var _setFrontProcessWithOptions: SetFrontProcessWithOptionsFunc?
     private var activationRequestID = UUID()
     private var delayedActivationWorkItems: [DispatchWorkItem] = []
+
+    /// Upper bound for one AX request made by background polling.
+    static let backgroundMessagingTimeout: Float = 0.25
+
+    /// Background polling runs on the main thread. With the system default timeout (about six
+    /// seconds), an app that is still launching or otherwise not answering would freeze the
+    /// taskbar, including clicks on other launcher icons. A timed-out request returns
+    /// `.cannotComplete`, which window enumeration already treats as transient. Requests made
+    /// for a click keep the default so a slow app still gets raised or reopened.
+    static func limitToBackgroundTimeout(_ element: AXUIElement) {
+        _ = AXUIElementSetMessagingTimeout(element, backgroundMessagingTimeout)
+    }
 
     init() {
         let symbolHandle = dlopen(nil, RTLD_LAZY)
@@ -61,8 +122,11 @@ final class AccessibilityService {
         return matchWindowIDByFrame(for: element)
     }
 
-    func enumerateWindows(for application: NSRunningApplication) -> [AXUIElement] {
-        switch windowEnumeration(for: application) {
+    func enumerateWindows(
+        for application: NSRunningApplication,
+        urgency: AXRequestUrgency = .interactive
+    ) -> [AXUIElement] {
+        switch windowEnumeration(for: application, urgency: urgency) {
         case .windows(let windows):
             return windows
         case .unavailable:
@@ -87,8 +151,11 @@ final class AccessibilityService {
         error == .cannotComplete
     }
 
-    func windowEnumeration(for application: NSRunningApplication) -> AXWindowEnumeration {
-        let (error, windows) = queryWindows(for: application)
+    func windowEnumeration(
+        for application: NSRunningApplication,
+        urgency: AXRequestUrgency = .interactive
+    ) -> AXWindowEnumeration {
+        let (error, windows) = queryWindows(for: application, urgency: urgency)
 
         switch error {
         case .success:
@@ -107,14 +174,27 @@ final class AccessibilityService {
         return error == .success ? !windows.isEmpty : nil
     }
 
-    private func queryWindows(for application: NSRunningApplication) -> (AXError, [AXUIElement]) {
-        let appElement = AXUIElementCreateApplication(application.processIdentifier)
+    private func queryWindows(
+        for application: NSRunningApplication,
+        urgency: AXRequestUrgency = .interactive
+    ) -> (AXError, [AXUIElement]) {
+        let pid = application.processIdentifier
+        let appElement = AXUIElementCreateApplication(pid)
+        if urgency == .background {
+            guard !AXUnresponsiveApplications.shared.shouldSkip(pid) else {
+                return (.cannotComplete, [])
+            }
+
+            Self.limitToBackgroundTimeout(appElement)
+        }
+
         var windowsValue: CFTypeRef?
         let error = AXUIElementCopyAttributeValue(
             appElement,
             kAXWindowsAttribute as CFString,
             &windowsValue
         )
+        AXUnresponsiveApplications.shared.record(error, for: pid)
 
         guard error == .success else {
             return (error, [])

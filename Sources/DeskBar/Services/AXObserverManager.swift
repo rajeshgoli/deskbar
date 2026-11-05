@@ -26,6 +26,8 @@ final class AXObserverManager {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var observers: [pid_t: AXObserver] = [:]
     private var pendingRefresh = AXRefreshBatch()
+    private static let installRetryDelay: TimeInterval = 1
+    private static let maximumInstallAttempts = 60
 
     private let notificationNames: [CFString] = [
         kAXCreatedNotification as CFString,
@@ -99,9 +101,14 @@ final class AXObserverManager {
         }
     }
 
-    private func installObserver(for application: NSRunningApplication) {
+    private func installObserver(for application: NSRunningApplication, attempt: Int = 0) {
         let pid = application.processIdentifier
-        guard observers[pid] == nil else {
+        guard observers[pid] == nil, !application.isTerminated else {
+            return
+        }
+
+        guard !AXUnresponsiveApplications.shared.shouldSkip(pid) else {
+            scheduleInstallRetry(for: application, after: attempt)
             return
         }
 
@@ -114,8 +121,17 @@ final class AXObserverManager {
         }
 
         let appElement = AXUIElementCreateApplication(pid)
-        notificationNames.forEach { notification in
-            _ = AXObserverAddNotification(observer, appElement, notification, context)
+        AccessibilityService.limitToBackgroundTimeout(appElement)
+        for notification in notificationNames {
+            let result = AXObserverAddNotification(observer, appElement, notification, context)
+            AXUnresponsiveApplications.shared.record(result, for: pid)
+
+            // An app that is still launching cannot answer yet. Each further registration
+            // would wait out its own timeout, so retry the whole set once it responds.
+            if AccessibilityService.isTransientEnumerationFailure(result) {
+                scheduleInstallRetry(for: application, after: attempt)
+                return
+            }
         }
 
         CFRunLoopAddSource(
@@ -125,6 +141,21 @@ final class AXObserverManager {
         )
 
         observers[pid] = observer
+
+        // Windows the app opened while it was not yet observable produced no notifications.
+        if attempt > 0 {
+            windowManager?.refresh()
+        }
+    }
+
+    private func scheduleInstallRetry(for application: NSRunningApplication, after attempt: Int) {
+        guard attempt < Self.maximumInstallAttempts else {
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.installRetryDelay) { [weak self] in
+            self?.installObserver(for: application, attempt: attempt + 1)
+        }
     }
 
     private func removeObserver(for pid: pid_t) {
