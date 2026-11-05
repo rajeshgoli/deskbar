@@ -195,7 +195,8 @@ final class WindowManager: ObservableObject {
         for application in regularApplications {
             let pid = application.processIdentifier
             guard case .windows(let axWindows) = accessibilityService.windowEnumeration(
-                for: application
+                for: application,
+                urgency: .background
             ) else {
                 // A transient AX failure (busy or unresponsive app) — we do not know this app's
                 // real window list this pass. Dropping its windows here would send them to the
@@ -1062,7 +1063,7 @@ final class WindowManager: ObservableObject {
         }
 
         for application in regularApplications {
-            let axWindows = accessibilityService.enumerateWindows(for: application)
+            let axWindows = accessibilityService.enumerateWindows(for: application, urgency: .background)
 
             for axWindow in axWindows {
                 guard

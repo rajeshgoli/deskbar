@@ -2112,12 +2112,33 @@ final class TaskbarContentView: NSView {
             return
         }
 
+        // As on Windows, clicking the button of the window that already has focus minimizes it.
+        if !windowInfo.isHidden, isFocusedWindow(windowInfo),
+           let windowElement = matchingWindowElement(for: windowInfo, application: application) {
+            accessibilityService.minimize(element: windowElement)
+            return
+        }
+
         if let windowElement = matchingWindowElement(for: windowInfo, application: application) {
             accessibilityService.raiseAndActivate(element: windowElement, app: application)
         } else {
             // Fallback: no AX element found, activate all windows
             application.activate(options: .activateAllWindows)
         }
+    }
+
+    /// Uses the same rule as the highlighted button, evaluated at click time rather than from
+    /// the last rebuild.
+    private func isFocusedWindow(_ windowInfo: WindowInfo) -> Bool {
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        guard windowInfo.pid == frontmostPID else {
+            return false
+        }
+
+        let frontmostWindowID = currentFrontmostWindowID(
+            in: scopedKnownWindows().filter(WindowManager.belongsInTaskZone)
+        )
+        return isWindowActive(windowInfo, frontmostPID: frontmostPID, frontmostWindowID: frontmostWindowID)
     }
 
     private func activateOrphanWindowApplication(_ windowInfo: WindowInfo) {
