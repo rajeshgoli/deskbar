@@ -156,6 +156,18 @@ final class LauncherButtonView: NSView {
             return
         }
 
+        // Like the Dock: when every window is minimized, bring one back instead of only
+        // activating an app that has nothing on screen.
+        let windows = accessibilityService.enumerateWindows(for: runningApplication)
+        if !windows.isEmpty,
+           windows.allSatisfy(accessibilityService.isMinimized(element:)),
+           let window = windows.first {
+            runningApplication.unhide()
+            _ = AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+            accessibilityService.raiseAndActivate(element: window, app: runningApplication)
+            return
+        }
+
         LauncherApplicationActivator.activate(
             runningApplication,
             bundleIdentifier: pinnedApp.bundleIdentifier,
