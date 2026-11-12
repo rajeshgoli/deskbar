@@ -23,6 +23,7 @@ Lightweight, native, no external dependencies. Does not modify any system settin
 - **Window grouping** — optionally group windows by app with expandable groups
 - **Drag reorder** — rearrange task buttons, pinned items hold position across activations
 - **Stable ordering** — tasks stay where they are, no jarring MRU jumps
+- **Fixed app order** — optionally keep every app in the slot you dragged it to, across restarts and while it is closed
 - **Minimized windows stay visible** — dimmed in the taskbar (Windows-style), click to restore
 - **Settings** — configurable full-width/compact layouts, shortcuts, appearance, Dock behavior, launchers, and blacklist
 - **Dock coexistence** — three modes (independent, auto-hide, hidden) with crash-safe restore

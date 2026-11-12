@@ -41,6 +41,7 @@ final class SettingsView: NSView {
     private let enableTrayIconHidingCheckbox = NSButton(checkboxWithTitle: "Hide selected tray app icons", target: nil, action: nil)
     private let showAllHiddenTrayAppsButton = NSButton(title: "Show All Hidden Apps", target: nil, action: nil)
     private let groupingModePopupButton = NSPopUpButton()
+    private let keepAppOrderCheckbox = NSButton(checkboxWithTitle: "Keep apps in a fixed order", target: nil, action: nil)
     private let dragReorderCheckbox = NSButton(checkboxWithTitle: "Drag reorder", target: nil, action: nil)
     private let middleClickClosesCheckbox = NSButton(checkboxWithTitle: "Middle-click closes", target: nil, action: nil)
     private let showOverFullscreenAppsCheckbox = NSButton(checkboxWithTitle: "Show over full-screen apps", target: nil, action: nil)
@@ -149,6 +150,7 @@ final class SettingsView: NSView {
         behaviorTab.view = makeFormView(rows: [
             makeLabeledControlRow(label: "Hover delay", control: hoverDelaySlider),
             makeLabeledControlRow(label: "Window grouping", control: groupingModePopupButton),
+            makeCheckboxRow(keepAppOrderCheckbox),
             makeCheckboxRow(dragReorderCheckbox),
             makeCheckboxRow(middleClickClosesCheckbox),
             makeCheckboxRow(flashAttentionIndicatorsCheckbox),
@@ -355,6 +357,9 @@ final class SettingsView: NSView {
         groupingModePopupButton.target = self
         groupingModePopupButton.action = #selector(groupingModeChanged(_:))
 
+        keepAppOrderCheckbox.target = self
+        keepAppOrderCheckbox.action = #selector(keepAppOrderChanged(_:))
+
         dragReorderCheckbox.target = self
         dragReorderCheckbox.action = #selector(dragReorderChanged(_:))
 
@@ -548,6 +553,13 @@ final class SettingsView: NSView {
                 }
 
                 self?.groupingModePopupButton.selectItem(at: index)
+            }
+            .store(in: &cancellables)
+
+        settings.$keepAppOrder
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.keepAppOrderCheckbox.state = value ? .on : .off
             }
             .store(in: &cancellables)
 
@@ -1310,6 +1322,11 @@ final class SettingsView: NSView {
         default:
             settings.groupingMode = .never
         }
+    }
+
+    @objc
+    private func keepAppOrderChanged(_ sender: NSButton) {
+        settings.keepAppOrder = sender.state == .on
     }
 
     @objc
