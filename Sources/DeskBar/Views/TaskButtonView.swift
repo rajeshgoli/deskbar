@@ -46,6 +46,18 @@ final class TaskButtonView: NSView, NSDraggingSource {
     static let minimumPluginActionTaskWidth: CGFloat = 88
     static let minimumAdaptiveTaskWidth: CGFloat = 32
     static let minimumAdaptivePluginActionTaskWidth: CGFloat = 32
+
+    /// The narrowest a titled button can be, widened for icons above 24 pt so
+    /// the icon keeps the room around it it has at the default size.
+    static func minimumTaskWidth(forIconSize iconSize: CGFloat) -> CGFloat {
+        max(minimumTaskWidth, iconSize + 32)
+    }
+
+    /// The narrowest a button can be on a full taskbar, widened for icons above
+    /// 24 pt so the icon never spills into the next button.
+    static func minimumAdaptiveTaskWidth(forIconSize iconSize: CGFloat) -> CGFloat {
+        max(minimumAdaptiveTaskWidth, iconSize + 8)
+    }
     private static let minimumInlinePluginActionTaskWidth: CGFloat = 72
     private static var activeHoverView: TaskButtonView?
 
@@ -223,6 +235,13 @@ final class TaskButtonView: NSView, NSDraggingSource {
     private var statusDefaultLeadingConstraint: NSLayoutConstraint?
     private var statusSMLeadingConstraint: NSLayoutConstraint?
     private var iconDefaultLeadingConstraint: NSLayoutConstraint?
+    private var iconWidthConstraint: NSLayoutConstraint?
+    private var iconHeightConstraint: NSLayoutConstraint?
+
+    /// Compact mode, no title and no plugin pill: the button shrinks to its icon.
+    private var isIconOnlyMode: Bool {
+        settings.compactIconOnlyButtons && !settings.showTitles && !showsPluginActionButton
+    }
     private var iconSMLeadingConstraint: NSLayoutConstraint?
     private var titleLeadingConstraint: NSLayoutConstraint?
     private var titleTrailingConstraint: NSLayoutConstraint?
@@ -269,7 +288,10 @@ final class TaskButtonView: NSView, NSDraggingSource {
     }
 
     var preferredTaskWidth: CGFloat {
-        usesAdaptiveWidth ? adaptiveTaskWidth : fullTaskWidth
+        if isIconOnlyMode {
+            return IconMetrics.iconOnlyTaskWidth
+        }
+        return usesAdaptiveWidth ? adaptiveTaskWidth : fullTaskWidth
     }
 
     private var fullTaskWidth: CGFloat {
@@ -316,7 +338,9 @@ final class TaskButtonView: NSView, NSDraggingSource {
     }
 
     func widthPlanItem(usesAdaptiveWidth: Bool) -> TaskbarWidthPlanItem {
-        let preferredWidth = usesAdaptiveWidth ? adaptiveTaskWidth : fullTaskWidth
+        let preferredWidth = isIconOnlyMode
+            ? IconMetrics.iconOnlyTaskWidth
+            : (usesAdaptiveWidth ? adaptiveTaskWidth : fullTaskWidth)
         return TaskbarWidthPlanItem(
             preferredWidth: preferredWidth,
             minimumWidth: minimumTaskWidth(usesAdaptiveWidth: usesAdaptiveWidth)
@@ -332,7 +356,9 @@ final class TaskButtonView: NSView, NSDraggingSource {
         isAgentWindow: Bool,
         pluginActionExtraWidth: CGFloat = 0
     ) -> CGFloat {
-        let minimumWidth = showsPluginActionButton ? minimumPluginActionTaskWidth : minimumTaskWidth
+        let minimumWidth = showsPluginActionButton
+            ? minimumPluginActionTaskWidth
+            : minimumTaskWidth(forIconSize: IconMetrics.iconSize)
         guard showsTitles else {
             return minimumWidth
         }
@@ -359,7 +385,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
 
         let titleThreshold = showsPluginActionButton
             ? Self.minimumPluginActionTaskWidth
-            : Self.minimumTaskWidth
+            : Self.minimumTaskWidth(forIconSize: IconMetrics.iconSize)
         return effectiveTaskWidth < titleThreshold
     }
 
@@ -440,7 +466,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
     }
 
     override var intrinsicContentSize: NSSize {
-        return NSSize(width: effectiveTaskWidth, height: 32)
+        return NSSize(width: effectiveTaskWidth, height: max(32, IconMetrics.iconSize + 8))
     }
 
     func setWidthMode(usesAdaptiveWidth: Bool, widthCap: CGFloat?) {
@@ -650,6 +676,8 @@ final class TaskButtonView: NSView, NSDraggingSource {
         self.statusDefaultLeadingConstraint = statusDefaultLeadingConstraint
         self.statusSMLeadingConstraint = statusSMLeadingConstraint
         self.iconDefaultLeadingConstraint = iconDefaultLeadingConstraint
+        iconWidthConstraint = iconView.widthAnchor.constraint(equalToConstant: IconMetrics.iconSize)
+        iconHeightConstraint = iconView.heightAnchor.constraint(equalToConstant: IconMetrics.iconSize)
         self.iconSMLeadingConstraint = iconSMLeadingConstraint
         self.dropIndicatorLeadingConstraint = dropIndicatorLeadingConstraint
         self.dropIndicatorTrailingConstraint = dropIndicatorTrailingConstraint
@@ -685,8 +713,8 @@ final class TaskButtonView: NSView, NSDraggingSource {
 
             iconDefaultLeadingConstraint,
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 24),
-            iconView.heightAnchor.constraint(equalToConstant: 24),
+            iconWidthConstraint!,
+            iconHeightConstraint!,
 
             titleLeadingConstraint,
             titleTrailingConstraint,
@@ -722,6 +750,13 @@ final class TaskButtonView: NSView, NSDraggingSource {
     }
 
     private func bindSettings() {
+        NotificationCenter.default.publisher(for: IconMetrics.didChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.applyIconMetrics()
+            }
+            .store(in: &cancellables)
+
         settings.$titleFontSize
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
@@ -734,6 +769,14 @@ final class TaskButtonView: NSView, NSDraggingSource {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
                 self?.maxWidth = value
+                self?.updateWidthConstraint()
+            }
+            .store(in: &cancellables)
+
+        settings.$compactIconOnlyButtons
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
                 self?.updateWidthConstraint()
             }
             .store(in: &cancellables)
@@ -1239,7 +1282,14 @@ final class TaskButtonView: NSView, NSDraggingSource {
         updateAppearance()
     }
 
+    private func applyIconMetrics() {
+        iconWidthConstraint?.constant = IconMetrics.iconSize
+        iconHeightConstraint?.constant = IconMetrics.iconSize
+        updateWidthConstraint()
+    }
+
     private func updateWidthConstraint() {
+        iconDefaultLeadingConstraint?.constant = isIconOnlyMode ? IconMetrics.iconOnlyHorizontalPadding : 8
         maxWidthConstraint?.constant = effectiveTaskWidth
         updateTaskButtonPluginActionButton()
         updateTitleVisibility()
@@ -1259,11 +1309,19 @@ final class TaskButtonView: NSView, NSDraggingSource {
     }
 
     private func minimumTaskWidth(usesAdaptiveWidth: Bool) -> CGFloat {
-        if usesAdaptiveWidth {
-            return showsPluginActionButton ? Self.minimumAdaptivePluginActionTaskWidth : Self.minimumAdaptiveTaskWidth
+        if isIconOnlyMode {
+            return IconMetrics.iconOnlyTaskWidth
         }
 
-        return showsPluginActionButton ? Self.minimumPluginActionTaskWidth : Self.minimumTaskWidth
+        if usesAdaptiveWidth {
+            return showsPluginActionButton
+                ? Self.minimumAdaptivePluginActionTaskWidth
+                : Self.minimumAdaptiveTaskWidth(forIconSize: IconMetrics.iconSize)
+        }
+
+        return showsPluginActionButton
+            ? Self.minimumPluginActionTaskWidth
+            : Self.minimumTaskWidth(forIconSize: IconMetrics.iconSize)
     }
 
     @objc

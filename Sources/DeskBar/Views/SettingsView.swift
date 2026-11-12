@@ -29,11 +29,43 @@ final class SettingsView: NSView {
     private let startAtLoginCheckbox = NSButton(checkboxWithTitle: "Start at login", target: nil, action: nil)
     private let dockModePopupButton = NSPopUpButton()
 
-    private let taskbarHeightSlider = NSSlider(value: 40, minValue: 32, maxValue: 60, target: nil, action: nil)
+    private let taskbarHeightSlider = NSSlider(
+        value: 40,
+        minValue: Double(IconMetrics.smallestTaskbarHeight),
+        maxValue: 96,
+        target: nil,
+        action: nil
+    )
+    private let taskbarHeightField = SettingsView.makeNumberField()
+    private let iconSizeField = SettingsView.makeNumberField()
+    private let itemSpacingField = SettingsView.makeNumberField()
+    private let iconSizeSlider = NSSlider(
+        value: Double(IconMetrics.defaultIconSize),
+        minValue: Double(IconMetrics.iconSizeRange.lowerBound),
+        maxValue: Double(IconMetrics.iconSizeRange.upperBound),
+        target: nil,
+        action: nil
+    )
+    private static let iconMetricsChangeInterval: TimeInterval = 0.15
+    private var pendingIconMetricsChange: DispatchWorkItem?
+    private weak var pendingIconMetricsControl: NSControl?
+    private var lastIconMetricsChange = Date.distantPast
+    private let itemSpacingSlider = NSSlider(
+        value: Double(IconMetrics.defaultItemSpacing),
+        minValue: Double(IconMetrics.itemSpacingRange.lowerBound),
+        maxValue: Double(IconMetrics.itemSpacingRange.upperBound),
+        target: nil,
+        action: nil
+    )
     private let layoutModePopupButton = NSPopUpButton()
     private let titleFontSizeSlider = NSSlider(value: 12, minValue: 8, maxValue: 18, target: nil, action: nil)
     private let maxTaskWidthSlider = NSSlider(value: 200, minValue: 100, maxValue: 400, target: nil, action: nil)
     private let showTitlesCheckbox = NSButton(checkboxWithTitle: "Show titles", target: nil, action: nil)
+    private let compactIconOnlyButtonsCheckbox = NSButton(
+        checkboxWithTitle: "Shrink buttons to their icon when titles are hidden",
+        target: nil,
+        action: nil
+    )
     private let thumbnailSizeSlider = NSSlider(value: 200, minValue: 100, maxValue: 400, target: nil, action: nil)
     private let resetAppearanceSlidersButton = NSButton(title: "Reset Sliders to Defaults", target: nil, action: nil)
 
@@ -134,10 +166,13 @@ final class SettingsView: NSView {
         appearanceTab.label = "Appearance"
         appearanceTab.view = makeFormView(rows: [
             makeLabeledControlRow(label: "DeskBar layout", control: layoutModePopupButton),
-            makeLabeledControlRow(label: "Taskbar height", control: taskbarHeightSlider),
+            makeSliderRow(label: "Taskbar height", slider: taskbarHeightSlider, field: taskbarHeightField),
+            makeSliderRow(label: "Icon size", slider: iconSizeSlider, field: iconSizeField),
+            makeSliderRow(label: "Icon spacing", slider: itemSpacingSlider, field: itemSpacingField),
             makeLabeledControlRow(label: "Title font size", control: titleFontSizeSlider),
             makeLabeledControlRow(label: "Max task width", control: maxTaskWidthSlider),
             makeCheckboxRow(showTitlesCheckbox),
+            makeCheckboxRow(compactIconOnlyButtonsCheckbox),
             makeLabeledControlRow(label: "Thumbnail size", control: thumbnailSizeSlider),
             makeButtonRow(resetAppearanceSlidersButton)
         ])
@@ -330,15 +365,30 @@ final class SettingsView: NSView {
 
         taskbarHeightSlider.target = self
         taskbarHeightSlider.action = #selector(taskbarHeightChanged(_:))
+        taskbarHeightField.target = self
+        taskbarHeightField.action = #selector(taskbarHeightFieldChanged(_:))
+        iconSizeField.target = self
+        iconSizeField.action = #selector(iconSizeFieldChanged(_:))
+        itemSpacingField.target = self
+        itemSpacingField.action = #selector(itemSpacingFieldChanged(_:))
 
         layoutModePopupButton.target = self
         layoutModePopupButton.action = #selector(layoutModeChanged(_:))
+
+        iconSizeSlider.target = self
+        iconSizeSlider.action = #selector(iconSizeChanged(_:))
+
+        itemSpacingSlider.target = self
+        itemSpacingSlider.action = #selector(itemSpacingChanged(_:))
 
         titleFontSizeSlider.target = self
         titleFontSizeSlider.action = #selector(titleFontSizeChanged(_:))
 
         maxTaskWidthSlider.target = self
         maxTaskWidthSlider.action = #selector(maxTaskWidthChanged(_:))
+
+        compactIconOnlyButtonsCheckbox.target = self
+        compactIconOnlyButtonsCheckbox.action = #selector(compactIconOnlyButtonsChanged(_:))
 
         showTitlesCheckbox.target = self
         showTitlesCheckbox.action = #selector(showTitlesChanged(_:))
@@ -477,6 +527,30 @@ final class SettingsView: NSView {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
                 self?.taskbarHeightSlider.doubleValue = value
+                self?.taskbarHeightField.doubleValue = value.rounded()
+            }
+            .store(in: &cancellables)
+
+        settings.$compactIconOnlyButtons
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.compactIconOnlyButtonsCheckbox.state = value ? .on : .off
+            }
+            .store(in: &cancellables)
+
+        settings.$iconSize
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.iconSizeSlider.doubleValue = value
+                self?.iconSizeField.doubleValue = value
+            }
+            .store(in: &cancellables)
+
+        settings.$itemSpacing
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.itemSpacingSlider.doubleValue = value
+                self?.itemSpacingField.doubleValue = value
             }
             .store(in: &cancellables)
 
@@ -832,6 +906,40 @@ final class SettingsView: NSView {
         row.distribution = .fill
         row.spacing = 12
         textLabel.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        return row
+    }
+
+    /// A number field shown next to a slider. It shows the value in points
+    /// and applies a typed value when Return is pressed or focus leaves.
+    private static func makeNumberField() -> NSTextField {
+        let field = NSTextField()
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .none
+        formatter.maximumFractionDigits = 0
+        field.formatter = formatter
+        field.alignment = .right
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        return field
+    }
+
+    private func makeSliderRow(label: String, slider: NSSlider, field: NSTextField) -> NSView {
+        let textLabel = NSTextField(labelWithString: label)
+        textLabel.alignment = .left
+        textLabel.widthAnchor.constraint(equalToConstant: 160).isActive = true
+
+        let unitLabel = NSTextField(labelWithString: "pt")
+        unitLabel.textColor = .secondaryLabelColor
+
+        slider.translatesAutoresizingMaskIntoConstraints = false
+        slider.widthAnchor.constraint(equalToConstant: 220).isActive = true
+
+        let row = NSStackView(views: [textLabel, slider, field, unitLabel])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.distribution = .fill
+        row.spacing = 12
+        row.setCustomSpacing(4, after: field)
         return row
     }
 
@@ -1242,8 +1350,99 @@ final class SettingsView: NSView {
     }
 
     @objc
+    private func compactIconOnlyButtonsChanged(_ sender: NSButton) {
+        settings.compactIconOnlyButtons = sender.state == .on
+    }
+
+    @objc
+    private func iconSizeChanged(_ sender: NSSlider) {
+        let value = sender.doubleValue.rounded()
+        applyIconMetricsChange(from: sender) { [weak self] in
+            self?.settings.iconSize = value
+        }
+    }
+
+    @objc
+    private func itemSpacingChanged(_ sender: NSSlider) {
+        let value = sender.doubleValue.rounded()
+        applyIconMetricsChange(from: sender) { [weak self] in
+            self?.settings.itemSpacing = value
+        }
+    }
+
+    /// A drag sends a value for every pixel, and each icon metric change
+    /// rebuilds every taskbar button and can resize the bar. Apply at most one
+    /// change per interval while dragging, and always the final value, so the
+    /// bar previews the size smoothly instead of thrashing.
+    /// A typed value or a reset replaces whatever a slider drag left pending.
+    private func cancelPendingIconMetricsChange() {
+        pendingIconMetricsChange?.cancel()
+        pendingIconMetricsChange = nil
+    }
+
+    private func applyIconMetricsChange(from control: NSControl, _ apply: @escaping () -> Void) {
+        if let pending = pendingIconMetricsChange {
+            // Another slider's final value is still waiting: apply it now
+            // rather than lose it.
+            if pendingIconMetricsControl !== control {
+                pending.perform()
+            }
+            pending.cancel()
+            pendingIconMetricsChange = nil
+        }
+
+        let elapsed = Date().timeIntervalSince(lastIconMetricsChange)
+        guard elapsed < Self.iconMetricsChangeInterval else {
+            lastIconMetricsChange = Date()
+            apply()
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.lastIconMetricsChange = Date()
+            self?.pendingIconMetricsChange = nil
+            apply()
+        }
+        pendingIconMetricsChange = workItem
+        pendingIconMetricsControl = control
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.iconMetricsChangeInterval - elapsed,
+            execute: workItem
+        )
+    }
+
+    @objc
     private func taskbarHeightChanged(_ sender: NSSlider) {
-        settings.taskbarHeight = sender.doubleValue
+        // A lower bar can shrink the icons, which rebuilds every button.
+        let value = sender.doubleValue.rounded()
+        applyIconMetricsChange(from: sender) { [weak self] in
+            self?.settings.taskbarHeight = value
+        }
+    }
+
+    @objc
+    private func taskbarHeightFieldChanged(_ sender: NSTextField) {
+        cancelPendingIconMetricsChange()
+        settings.taskbarHeight = Self.clampedFieldValue(sender, to: taskbarHeightSlider)
+    }
+
+    @objc
+    private func iconSizeFieldChanged(_ sender: NSTextField) {
+        cancelPendingIconMetricsChange()
+        settings.iconSize = Self.clampedFieldValue(sender, to: iconSizeSlider)
+    }
+
+    @objc
+    private func itemSpacingFieldChanged(_ sender: NSTextField) {
+        cancelPendingIconMetricsChange()
+        settings.itemSpacing = Self.clampedFieldValue(sender, to: itemSpacingSlider)
+    }
+
+    /// The typed value, rounded and kept within the slider's range. An empty or
+    /// unreadable entry keeps the slider's current value.
+    private static func clampedFieldValue(_ field: NSTextField, to slider: NSSlider) -> CGFloat {
+        let typed = Double(field.stringValue.trimmingCharacters(in: .whitespaces)) ?? slider.doubleValue
+        return CGFloat(min(max(typed.rounded(), slider.minValue), slider.maxValue))
     }
 
     @objc
@@ -1282,6 +1481,7 @@ final class SettingsView: NSView {
 
     @objc
     private func resetAppearanceSliders(_ sender: NSButton) {
+        cancelPendingIconMetricsChange()
         settings.resetAppearanceSlidersToDefaults()
     }
 

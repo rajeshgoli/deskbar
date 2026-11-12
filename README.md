@@ -25,6 +25,7 @@ Lightweight, native, no external dependencies. Does not modify any system settin
 - **Stable ordering** — tasks stay where they are, no jarring MRU jumps
 - **Minimized windows stay visible** — dimmed in the taskbar (Windows-style), click to restore
 - **Settings** — configurable full-width/compact layouts, shortcuts, appearance, Dock behavior, launchers, and blacklist
+- **Icon size and spacing** — larger or smaller icons, packed as tightly as you like; the taskbar height and icon size adjust to each other
 - **Dock coexistence** — three modes (independent, auto-hide, hidden) with crash-safe restore
 - **Start at login** — LaunchAgent-based, no Developer ID required
 - **Blacklist** — hide apps you don't want in the taskbar

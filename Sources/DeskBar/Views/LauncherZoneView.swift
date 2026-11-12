@@ -65,7 +65,7 @@ final class LauncherZoneView: NSStackView {
         buttonsStackView.orientation = .horizontal
         buttonsStackView.alignment = .centerY
         buttonsStackView.distribution = .fill
-        buttonsStackView.spacing = 8
+        buttonsStackView.spacing = IconMetrics.itemSpacing
         buttonsStackView.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
 
         addArrangedSubview(buttonsStackView)
@@ -95,6 +95,17 @@ final class LauncherZoneView: NSStackView {
     }
 
     private func bindState() {
+        NotificationCenter.default.publisher(for: IconMetrics.didChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.buttonsStackView.spacing = IconMetrics.itemSpacing
+                self.invalidateIntrinsicContentSize()
+                self.needsLayout = true
+                self.superview?.needsLayout = true
+            }
+            .store(in: &cancellables)
+
         settings.$dragReorder
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -143,9 +154,9 @@ final class LauncherZoneView: NSStackView {
 
         let icon: NSImage?
         if let appIcon = runningApplication?.icon {
-            icon = appIcon.scaled(to: NSSize(width: 32, height: 32))
+            icon = appIcon.scaled(to: IconMetrics.iconRenderSize)
         } else if let applicationURL = pinnedApp.applicationURL {
-            icon = NSWorkspace.shared.icon(forFile: applicationURL.path).scaled(to: NSSize(width: 32, height: 32))
+            icon = NSWorkspace.shared.icon(forFile: applicationURL.path).scaled(to: IconMetrics.iconRenderSize)
         } else {
             icon = nil
         }
@@ -383,8 +394,10 @@ private final class LauncherZoneButtonView: NSView, NSDraggingSource {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    private lazy var iconMetricsBinding = IconMetricsBinding(view: self)
+
     override var intrinsicContentSize: NSSize {
-        NSSize(width: 36, height: 32)
+        NSSize(width: IconMetrics.launcherButtonWidth, height: IconMetrics.rowHeight)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -463,13 +476,13 @@ private final class LauncherZoneButtonView: NSView, NSDraggingSource {
         self.dropIndicatorTrailingConstraint = dropIndicatorTrailingConstraint
 
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 36),
-            heightAnchor.constraint(equalToConstant: 32),
+            iconMetricsBinding.bind(widthAnchor.constraint(equalToConstant: 36)) { IconMetrics.launcherButtonWidth },
+            iconMetricsBinding.bind(heightAnchor.constraint(equalToConstant: 32)) { IconMetrics.rowHeight },
 
             iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 28),
-            iconView.heightAnchor.constraint(equalToConstant: 28),
+            iconMetricsBinding.bind(iconView.widthAnchor.constraint(equalToConstant: 28)) { IconMetrics.launcherIconSize },
+            iconMetricsBinding.bind(iconView.heightAnchor.constraint(equalToConstant: 28)) { IconMetrics.launcherIconSize },
 
             dropIndicatorView.topAnchor.constraint(equalTo: topAnchor, constant: 2),
             dropIndicatorView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),

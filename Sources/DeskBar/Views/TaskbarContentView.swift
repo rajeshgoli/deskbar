@@ -32,8 +32,8 @@ final class TaskbarContentView: NSView {
     private let rightTaskZoneSeparatorView = TaskZoneSeparatorView()
     private let clusterLeadingSpacerView = TaskZoneFlexibleSpacerView()
     private let clusterTrailingSpacerView = TaskZoneFlexibleSpacerView()
-    private let minimumZoneContentHeight: CGFloat = 32
-    private let taskZoneItemSpacing: CGFloat = 8
+    private var minimumZoneContentHeight: CGFloat { IconMetrics.rowHeight }
+    private var taskZoneItemSpacing: CGFloat { IconMetrics.itemSpacing }
     private let taskZoneGroupSpacing: CGFloat = 12
     private let compactTaskZoneSpacerWidth: CGFloat = 8
     static let minimumResponsiveContentWidth: CGFloat = 320
@@ -609,6 +609,30 @@ final class TaskbarContentView: NSView {
             }
             .store(in: &cancellables)
 
+        settings.$compactIconOnlyButtons
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.rebuildTaskZone()
+                self?.schedulePreferredWidthNotification()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: IconMetrics.didChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                [self.leftTaskZoneStackView, self.neutralTaskZoneStackView, self.rightTaskZoneStackView].forEach {
+                    $0.spacing = self.taskZoneItemSpacing
+                }
+                // Task views pin their size when created; rebuild them at the new size.
+                Array(self.taskItemViews.keys).forEach { self.removeCachedTaskItemView(for: $0) }
+                self.rebuildTaskZone()
+                self.updateTaskbarLayout()
+                self.schedulePreferredWidthNotification()
+            }
+            .store(in: &cancellables)
+
         settings.$showSystemResourceWidget
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -894,7 +918,7 @@ final class TaskbarContentView: NSView {
                 await thumbnailService?.captureThumbnail(windowID: cgWindowID)
             }
         }
-        buttonView.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        buttonView.heightAnchor.constraint(equalToConstant: IconMetrics.rowHeight).isActive = true
         taskItemViews[itemID] = buttonView
         return buttonView
     }
@@ -1955,14 +1979,18 @@ final class TaskbarContentView: NSView {
 
         return windows.reduce(0) { partialResult, window in
             let resolvedTitle = window.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? window.appName : window.title
-            let textWidth = TaskButtonView.preferredWidth(
-                title: resolvedTitle,
-                font: font,
-                maxWidth: settings.maxTaskWidth,
-                showsTitles: settings.showTitles,
-                showsPluginActionButton: smPluginMenuConfiguration(for: window)?.showsActionButton == true,
-                isAgentWindow: smAnnotation(for: window) != nil
-            )
+            let showsPluginActionButton = smPluginMenuConfiguration(for: window)?.showsActionButton == true
+            // Compact icon-only buttons are as wide as their icon.
+            let textWidth = settings.compactIconOnlyButtons && !settings.showTitles && !showsPluginActionButton
+                ? IconMetrics.iconOnlyTaskWidth
+                : TaskButtonView.preferredWidth(
+                    title: resolvedTitle,
+                    font: font,
+                    maxWidth: settings.maxTaskWidth,
+                    showsTitles: settings.showTitles,
+                    showsPluginActionButton: showsPluginActionButton,
+                    isAgentWindow: smAnnotation(for: window) != nil
+                )
 
             return partialResult + textWidth + taskZoneItemSpacing
         }
@@ -2469,10 +2497,10 @@ private final class TaskZoneGroupButtonView: NSView, NSDraggingSource {
 
     override var intrinsicContentSize: NSSize {
         if showsActivityOverlay, runtimeState.activitySummary != nil {
-            return NSSize(width: 140, height: 32)
+            return NSSize(width: 140, height: IconMetrics.rowHeight)
         }
 
-        return NSSize(width: 40, height: 32)
+        return NSSize(width: IconMetrics.groupHeaderWidth, height: IconMetrics.rowHeight)
     }
 
     override func layout() {
@@ -2609,8 +2637,8 @@ private final class TaskZoneGroupButtonView: NSView, NSDraggingSource {
         self.dropIndicatorTrailingConstraint = dropIndicatorTrailingConstraint
 
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(greaterThanOrEqualToConstant: 40),
-            heightAnchor.constraint(equalToConstant: 32),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: IconMetrics.groupHeaderWidth),
+            heightAnchor.constraint(equalToConstant: IconMetrics.rowHeight),
 
             statusIndicatorView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 3),
             statusIndicatorView.topAnchor.constraint(equalTo: topAnchor, constant: 6),
@@ -2619,8 +2647,8 @@ private final class TaskZoneGroupButtonView: NSView, NSDraggingSource {
 
             iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 24),
-            iconView.heightAnchor.constraint(equalToConstant: 24),
+            iconView.widthAnchor.constraint(equalToConstant: IconMetrics.iconSize),
+            iconView.heightAnchor.constraint(equalToConstant: IconMetrics.iconSize),
 
             activityBadgeView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
             activityBadgeView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
@@ -2956,7 +2984,7 @@ private final class TaskZoneGroupContainerView: NSView {
             stackView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
-        headerView.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        headerView.heightAnchor.constraint(equalToConstant: IconMetrics.rowHeight).isActive = true
         update(
             group: group,
             frontmostPID: frontmostPID,
@@ -3055,7 +3083,7 @@ private final class TaskZoneGroupContainerView: NSView {
                     ) { [windowActivationHandler] windowInfo in
                         windowActivationHandler(windowInfo)
                     }
-                    newButtonView.heightAnchor.constraint(equalToConstant: 32).isActive = true
+                    newButtonView.heightAnchor.constraint(equalToConstant: IconMetrics.rowHeight).isActive = true
                     childViews[windowID] = newButtonView
                     buttonView = newButtonView
                 }

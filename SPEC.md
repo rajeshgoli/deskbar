@@ -535,6 +535,9 @@ Settings table:
 | Setting | Default |
 |---|---|
 | Taskbar height | 40pt |
+| Icon size | 24pt (16–64) |
+| Icon spacing | 8pt (0–16) |
+| Shrink buttons to their icon when titles are hidden | false |
 | DeskBar layout | `fullWidth` (options: `fullWidth`, `fullWidthGlass`, `compact`, `compactGlass`) |
 | Title font size | 12pt |
 | Max task width | 200pt |
@@ -556,7 +559,9 @@ Settings table:
 | Enable Apps launcher shortcut | true |
 | Apps launcher shortcut | `controlOptionReturn` (options: `controlOptionReturn`, `optionSpace`, `controlOptionSpace`, `commandTap`) |
 
-Appearance includes a "Reset Sliders to Defaults" action that restores taskbar height, title font size, max task width, and thumbnail size to their default values.
+Appearance includes a "Reset Sliders to Defaults" action that restores taskbar height, icon size, icon spacing, title font size, max task width, and thumbnail size to their default values.
+
+Taskbar height and icon size depend on each other: the bar is never lower than its button band, which is 32pt up to 24pt icons and the icon plus 8pt above that. Each slider keeps the value chosen for it, and the other follows only as far as needed: larger icons raise the bar and smaller ones give the chosen height back; a lower bar shrinks the icons and a taller one gives the chosen size back.
 
 **Milestone:** All settings configurable and persistent.
 
