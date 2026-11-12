@@ -60,6 +60,22 @@ class TaskbarSettings: ObservableObject {
         didSet { defaults.set(groupingMode.rawValue, forKey: "groupingMode") }
     }
 
+    /// Keep every app in the slot it was last dragged to, across restarts. Off by default.
+    @Published var keepAppOrder: Bool {
+        didSet { defaults.set(keepAppOrder, forKey: "keepAppOrder") }
+    }
+
+    /// Read and written on every task zone rebuild, so it lives in the defaults
+    /// rather than in a published property.
+    var persistentAppOrder: PersistentAppOrder {
+        get { PersistentAppOrder(defaults: defaults) }
+        set { newValue.save(to: defaults) }
+    }
+
+    /// Sent after a drag changes `persistentAppOrder`, with the taskbar that
+    /// handled the drag, so the taskbars on other displays follow it.
+    let persistentAppOrderChangedByDrag = PassthroughSubject<ObjectIdentifier, Never>()
+
     @Published var dragReorder: Bool {
         didSet { defaults.set(dragReorder, forKey: "dragReorder") }
     }
@@ -219,6 +235,7 @@ class TaskbarSettings: ObservableObject {
         } else {
             groupingMode = .never
         }
+        keepAppOrder = defaults.object(forKey: "keepAppOrder") as? Bool ?? false
         dragReorder = defaults.object(forKey: "dragReorder") as? Bool ?? true
         middleClickCloses = defaults.object(forKey: "middleClickCloses") as? Bool ?? true
         thumbnailSize = defaults.object(forKey: "thumbnailSize") as? CGFloat ?? Self.defaultThumbnailSize

@@ -541,6 +541,7 @@ Settings table:
 | Show titles | true |
 | Group by app | false |
 | Drag reorder | true |
+| Keep apps in a fixed order | false |
 | Middle-click closes | true |
 | Thumbnail size | 200pt |
 | Hover delay | 400ms |

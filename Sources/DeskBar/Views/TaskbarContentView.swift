@@ -588,6 +588,24 @@ final class TaskbarContentView: NSView {
             }
             .store(in: &cancellables)
 
+        settings.$keepAppOrder
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.rebuildTaskZone()
+            }
+            .store(in: &cancellables)
+
+        settings.persistentAppOrderChangedByDrag
+            .receive(on: RunLoop.main)
+            .sink { [weak self] sender in
+                guard let self, sender != ObjectIdentifier(self) else {
+                    return
+                }
+                self.rebuildTaskZone()
+            }
+            .store(in: &cancellables)
+
         settings.$titleFontSize
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -1009,7 +1027,7 @@ final class TaskbarContentView: NSView {
 
         let orderedIDs = ungroupedTaskOrderState.arrangedIDs(for: ids)
         let windowsByID = Dictionary(preservingFirstValues: windows.map { (ungroupedTaskItemID(for: $0), $0) })
-        return orderedIDs.compactMap { windowsByID[$0] }
+        return applyingPersistentAppOrder(orderedIDs.compactMap { windowsByID[$0] }, appKey: appOrderKey(for:))
     }
 
     private func uniqueWindowsByUngroupedTaskItemID(_ windows: [WindowInfo]) -> [WindowInfo] {
@@ -1032,7 +1050,7 @@ final class TaskbarContentView: NSView {
 
         let orderedIDs = groupedTaskOrderState.arrangedIDs(for: ids)
         let itemsByID = Dictionary(preservingFirstValues: items.map { (groupedTaskItemID(for: $0), $0) })
-        return orderedIDs.compactMap { itemsByID[$0] }
+        return applyingPersistentAppOrder(orderedIDs.compactMap { itemsByID[$0] }, appKey: appOrderKey(for:))
     }
 
     private func groupedTaskItems(from windows: [WindowInfo]) -> [TaskZoneItem] {
@@ -1315,6 +1333,18 @@ final class TaskbarContentView: NSView {
             ungroupedTaskOrderState.applyManualOrder(reorderedIDs, userPositionedItemID: payload.itemID)
         }
 
+        if settings.keepAppOrder {
+            let appKeyByItemID = currentTaskAppKeysByItemID()
+            let keyedIDs = reorderedIDs.filter { appKeyByItemID[$0] != nil }
+            var appOrder = settings.persistentAppOrder
+            appOrder.applyManualOrder(
+                keyedIDs.compactMap { appKeyByItemID[$0] },
+                movedIndex: keyedIDs.firstIndex(of: payload.itemID)
+            )
+            settings.persistentAppOrder = appOrder
+            settings.persistentAppOrderChangedByDrag.send(ObjectIdentifier(self))
+        }
+
         rebuildTaskZone()
         return true
     }
@@ -1322,12 +1352,61 @@ final class TaskbarContentView: NSView {
     private func currentTaskOrderIDs() -> [String] {
         let scopedWindows = scopedTaskZoneWindows()
 
+        let orderedIDs: [String]
         if shouldGroupWindows(scopedWindows) {
             let items = groupedTaskItems(from: scopedWindows)
-            return groupedTaskOrderState.arrangedIDs(for: items.map(groupedTaskItemID(for:)))
+            orderedIDs = groupedTaskOrderState.arrangedIDs(for: items.map(groupedTaskItemID(for:)))
+        } else {
+            orderedIDs = ungroupedTaskOrderState.arrangedIDs(for: scopedWindows.map(ungroupedTaskItemID(for:)))
         }
 
-        return ungroupedTaskOrderState.arrangedIDs(for: scopedWindows.map(ungroupedTaskItemID(for:)))
+        guard settings.keepAppOrder else {
+            return orderedIDs
+        }
+        let appKeyByItemID = currentTaskAppKeysByItemID()
+        return settings.persistentAppOrder.arranged(orderedIDs) { appKeyByItemID[$0] ?? $0 }
+    }
+
+    private func currentTaskAppKeysByItemID() -> [String: String] {
+        let scopedWindows = scopedTaskZoneWindows()
+        if shouldGroupWindows(scopedWindows) {
+            return Dictionary(preservingFirstValues: groupedTaskItems(from: scopedWindows).map {
+                (groupedTaskItemID(for: $0), appOrderKey(for: $0))
+            })
+        }
+        return Dictionary(preservingFirstValues: scopedWindows.map {
+            (ungroupedTaskItemID(for: $0), appOrderKey(for: $0))
+        })
+    }
+
+    /// With "Keep apps in a fixed order" on, sorts the task zone by the saved
+    /// per-app order and records apps seen for the first time at its end.
+    private func applyingPersistentAppOrder<Item>(_ items: [Item], appKey: (Item) -> String) -> [Item] {
+        guard settings.keepAppOrder else {
+            return items
+        }
+
+        var appOrder = settings.persistentAppOrder
+        if appOrder.register(items.map(appKey)) {
+            settings.persistentAppOrder = appOrder
+        }
+        return appOrder.arranged(items, appKey: appKey)
+    }
+
+    private func appOrderKey(for window: WindowInfo) -> String {
+        if let bundleIdentifier = window.bundleIdentifier, !bundleIdentifier.isEmpty {
+            return bundleIdentifier
+        }
+        return "name:\(window.appName)"
+    }
+
+    private func appOrderKey(for item: TaskZoneItem) -> String {
+        switch item {
+        case .window(let window):
+            return appOrderKey(for: window)
+        case .group(let group):
+            return group.windows.first.map(appOrderKey(for:)) ?? group.id
+        }
     }
 
     private func reorderedItemIDs(
