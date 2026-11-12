@@ -125,6 +125,32 @@ class TaskbarSettings: ObservableObject {
         didSet { defaults.set(showSystemResourceNetworkMetric, forKey: "showSystemResourceNetworkMetric") }
     }
 
+    static let resourceWidgetScaleRange: ClosedRange<CGFloat> = 1...2
+
+    /// How large the taskbar's system resource widget is drawn, as a factor
+    /// of its normal size. 1 (the default) keeps the existing look.
+    @Published var resourceWidgetScale: CGFloat {
+        didSet { defaults.set(resourceWidgetScale, forKey: "resourceWidgetScale") }
+    }
+
+    static let resourceWidgetBarWidthRange: ClosedRange<CGFloat> = 0...1
+
+    /// Width of the memory, CPU and GPU usage bars as a fraction of their
+    /// normal width; 0 hides them and leaves the numbers. 1 by default.
+    @Published var resourceWidgetBarWidth: CGFloat {
+        didSet { defaults.set(resourceWidgetBarWidth, forKey: "resourceWidgetBarWidth") }
+    }
+
+    /// The scale the widget is drawn at: the one chosen, but never taller than
+    /// the taskbar leaves room for, and never smaller than normal.
+    static func effectiveResourceWidgetScale(scale: CGFloat, taskbarHeight: CGFloat) -> CGFloat {
+        let fittingScale = (taskbarHeight - resourceWidgetVerticalMargin) / resourceWidgetBaseHeight
+        return max(resourceWidgetScaleRange.lowerBound, min(scale, fittingScale))
+    }
+
+    static let resourceWidgetBaseHeight: CGFloat = 32
+    static let resourceWidgetVerticalMargin: CGFloat = 8
+
     @Published var systemResourceWidgetLocation: SystemResourceWidgetLocation {
         didSet { defaults.set(systemResourceWidgetLocation.rawValue, forKey: "systemResourceWidgetLocation") }
     }
@@ -235,6 +261,14 @@ class TaskbarSettings: ObservableObject {
         showSystemResourceCPUMetric = defaults.object(forKey: "showSystemResourceCPUMetric") as? Bool ?? true
         showSystemResourceGPUMetric = defaults.object(forKey: "showSystemResourceGPUMetric") as? Bool ?? true
         showSystemResourceNetworkMetric = defaults.object(forKey: "showSystemResourceNetworkMetric") as? Bool ?? true
+        resourceWidgetScale = min(
+            max(defaults.object(forKey: "resourceWidgetScale") as? CGFloat ?? 1, Self.resourceWidgetScaleRange.lowerBound),
+            Self.resourceWidgetScaleRange.upperBound
+        )
+        resourceWidgetBarWidth = min(
+            max(defaults.object(forKey: "resourceWidgetBarWidth") as? CGFloat ?? 1, Self.resourceWidgetBarWidthRange.lowerBound),
+            Self.resourceWidgetBarWidthRange.upperBound
+        )
         systemResourceWidgetLocation = SystemResourceWidgetLocation(
             rawValue: defaults.string(forKey: "systemResourceWidgetLocation") ?? ""
         ) ?? .taskbar

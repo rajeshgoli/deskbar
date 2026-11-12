@@ -550,6 +550,8 @@ Settings table:
 | Show memory pressure metric | true |
 | Show CPU usage metric | true |
 | Show GPU usage metric | true |
+| Widget size (system resource widget) | 100% |
+| Usage bar width (system resource widget) | 100% |
 | Start at login | false |
 | Show on all monitors | true |
 | Enable Alt-Tab / Option-Tab window switcher | true |
