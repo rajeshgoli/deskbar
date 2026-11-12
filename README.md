@@ -19,7 +19,7 @@ Lightweight, native, no external dependencies. Does not modify any system settin
 - **Dock-style right-click menus** — task and launcher menus expose windows plus Show All Windows, Hide, Quit, and launcher options
 - **Real-time updates** — windows appear/disappear as you open/close them, no polling lag
 - **Multi-monitor** — taskbar on every display, each showing only that display's windows
-- **Hover thumbnails** — live window previews via ScreenCaptureKit (requires Screen Recording permission)
+- **Hover thumbnails** — live window previews via ScreenCaptureKit (requires Screen Recording permission); can be turned off in Behavior settings
 - **Window grouping** — optionally group windows by app with expandable groups
 - **Drag reorder** — rearrange task buttons, pinned items hold position across activations
 - **Stable ordering** — tasks stay where they are, no jarring MRU jumps

@@ -894,7 +894,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
             return false
         }
 
-        return cgWindowID != 0 && !windowInfo.isProvisional
+        return settings.showHoverPreviews && cgWindowID != 0 && !windowInfo.isProvisional
     }
 
     private func requestThumbnailPreview() {

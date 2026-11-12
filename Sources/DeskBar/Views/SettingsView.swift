@@ -37,6 +37,7 @@ final class SettingsView: NSView {
     private let thumbnailSizeSlider = NSSlider(value: 200, minValue: 100, maxValue: 400, target: nil, action: nil)
     private let resetAppearanceSlidersButton = NSButton(title: "Reset Sliders to Defaults", target: nil, action: nil)
 
+    private let showHoverPreviewsCheckbox = NSButton(checkboxWithTitle: "Show window previews on hover", target: nil, action: nil)
     private let hoverDelaySlider = NSSlider(value: 400, minValue: 100, maxValue: 1000, target: nil, action: nil)
     private let enableTrayIconHidingCheckbox = NSButton(checkboxWithTitle: "Hide selected tray app icons", target: nil, action: nil)
     private let showAllHiddenTrayAppsButton = NSButton(title: "Show All Hidden Apps", target: nil, action: nil)
@@ -147,6 +148,7 @@ final class SettingsView: NSView {
         let behaviorTab = NSTabViewItem(identifier: "behavior")
         behaviorTab.label = "Behavior"
         behaviorTab.view = makeFormView(rows: [
+            makeCheckboxRow(showHoverPreviewsCheckbox),
             makeLabeledControlRow(label: "Hover delay", control: hoverDelaySlider),
             makeLabeledControlRow(label: "Window grouping", control: groupingModePopupButton),
             makeCheckboxRow(dragReorderCheckbox),
@@ -349,6 +351,9 @@ final class SettingsView: NSView {
         resetAppearanceSlidersButton.target = self
         resetAppearanceSlidersButton.action = #selector(resetAppearanceSliders(_:))
 
+        showHoverPreviewsCheckbox.target = self
+        showHoverPreviewsCheckbox.action = #selector(showHoverPreviewsChanged(_:))
+
         hoverDelaySlider.target = self
         hoverDelaySlider.action = #selector(hoverDelayChanged(_:))
 
@@ -531,6 +536,15 @@ final class SettingsView: NSView {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
                 self?.hoverDelaySlider.doubleValue = value * 1000
+            }
+            .store(in: &cancellables)
+
+        settings.$showHoverPreviews
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.showHoverPreviewsCheckbox.state = value ? .on : .off
+                // The delay only times the preview.
+                self?.hoverDelaySlider.isEnabled = value
             }
             .store(in: &cancellables)
 
@@ -1288,6 +1302,11 @@ final class SettingsView: NSView {
     @objc
     private func hoverDelayChanged(_ sender: NSSlider) {
         settings.hoverDelay = sender.doubleValue / 1000
+    }
+
+    @objc
+    private func showHoverPreviewsChanged(_ sender: NSButton) {
+        settings.showHoverPreviews = sender.state == .on
     }
 
     @objc
