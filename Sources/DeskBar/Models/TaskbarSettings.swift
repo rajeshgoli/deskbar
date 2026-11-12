@@ -72,6 +72,11 @@ class TaskbarSettings: ObservableObject {
         didSet { defaults.set(thumbnailSize, forKey: "thumbnailSize") }
     }
 
+    /// Show a window thumbnail when hovering its task button. On by default.
+    @Published var showHoverPreviews: Bool {
+        didSet { defaults.set(showHoverPreviews, forKey: "showHoverPreviews") }
+    }
+
     @Published var hoverDelay: TimeInterval {
         didSet { defaults.set(hoverDelay, forKey: "hoverDelay") }
     }
@@ -223,6 +228,7 @@ class TaskbarSettings: ObservableObject {
         middleClickCloses = defaults.object(forKey: "middleClickCloses") as? Bool ?? true
         thumbnailSize = defaults.object(forKey: "thumbnailSize") as? CGFloat ?? Self.defaultThumbnailSize
         hoverDelay = defaults.object(forKey: "hoverDelay") as? TimeInterval ?? 0.4
+        showHoverPreviews = defaults.object(forKey: "showHoverPreviews") as? Bool ?? true
         hiddenTrayApps = defaults.dictionary(forKey: "hiddenTrayApps") as? [String: String] ?? [:]
         enableTrayIconHiding = defaults.object(forKey: "enableTrayIconHiding") as? Bool ?? true
         dockMode = DockMode(rawValue: defaults.string(forKey: "dockMode") ?? "") ?? .independent

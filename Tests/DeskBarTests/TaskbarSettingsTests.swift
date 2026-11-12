@@ -38,6 +38,23 @@ struct TaskbarSettingsTests {
     }
 
     @Test
+    func hoverPreviewsDefaultOnAndPersist() {
+        let suiteName = "TaskbarSettingsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+
+        defaults.removePersistentDomain(forName: suiteName)
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+
+        let settings = TaskbarSettings(defaults: defaults)
+        #expect(settings.showHoverPreviews)
+
+        settings.showHoverPreviews = false
+        #expect(TaskbarSettings(defaults: defaults).showHoverPreviews == false)
+    }
+
+    @Test
     func migratesLegacyGroupByAppSetting() {
         let suiteName = "TaskbarSettingsTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

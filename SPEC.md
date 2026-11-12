@@ -544,6 +544,7 @@ Settings table:
 | Middle-click closes | true |
 | Thumbnail size | 200pt |
 | Hover delay | 400ms |
+| Show window previews on hover | true |
 | Dock mode | `independent` (options: `independent`, `autoHide`, `hidden`) |
 | Show over full-screen apps | false |
 | Show system resource widget | true |
