@@ -456,6 +456,23 @@ final class TaskbarContentView: NSView {
             }
             .store(in: &cancellables)
 
+        // A count can change while the app keeps its badge (2 -> 3 unread).
+        badgeMonitor.$appBadgeLabels
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.scheduleRebuildTaskZone()
+            }
+            .store(in: &cancellables)
+
+        settings.$showUnreadCounts
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.scheduleRebuildTaskZone()
+            }
+            .store(in: &cancellables)
+
         appStateMonitor.$states
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -2658,7 +2675,10 @@ private final class TaskZoneGroupButtonView: NSView, NSDraggingSource {
 
     private func updateAppearance() {
         if let icon = appGroup.icon {
-            iconView.image = hasBadge ? icon.withBadgeDot() : icon
+            iconView.image = hasBadge ? icon.withUnreadBadge(
+                for: appGroup.windows.first?.bundleIdentifier ?? appGroup.id,
+                atLeadingCorner: true
+            ) : icon
         } else {
             iconView.image = nil
         }

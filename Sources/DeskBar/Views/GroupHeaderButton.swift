@@ -118,7 +118,10 @@ final class GroupHeaderButton: NSView {
 
     private func updateAppearance() {
         if let icon = appGroup.icon {
-            iconView.image = hasBadge ? icon.withBadgeDot() : icon
+            iconView.image = hasBadge ? icon.withUnreadBadge(
+                for: appGroup.windows.first?.bundleIdentifier ?? appGroup.id,
+                atLeadingCorner: true
+            ) : icon
         } else {
             iconView.image = nil
         }

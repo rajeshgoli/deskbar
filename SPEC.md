@@ -542,6 +542,7 @@ Settings table:
 | Group by app | false |
 | Drag reorder | true |
 | Middle-click closes | true |
+| Show unread counts on app icons | false |
 | Thumbnail size | 200pt |
 | Hover delay | 400ms |
 | Dock mode | `independent` (options: `independent`, `autoHide`, `hidden`) |
