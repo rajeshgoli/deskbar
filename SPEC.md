@@ -552,6 +552,7 @@ Settings table:
 | Show GPU usage metric | true |
 | Start at login | false |
 | Show on all monitors | true |
+| Group windows by screen side | true |
 | Enable Alt-Tab / Option-Tab window switcher | true |
 | Enable Apps launcher shortcut | true |
 | Apps launcher shortcut | `controlOptionReturn` (options: `controlOptionReturn`, `optionSpace`, `controlOptionSpace`, `commandTap`) |

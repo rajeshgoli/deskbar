@@ -21,6 +21,7 @@ Lightweight, native, no external dependencies. Does not modify any system settin
 - **Multi-monitor** — taskbar on every display, each showing only that display's windows
 - **Hover thumbnails** — live window previews via ScreenCaptureKit (requires Screen Recording permission)
 - **Window grouping** — optionally group windows by app with expandable groups
+- **Screen-side groups** — windows filling the left or right half of the screen sit at that end of the task zone; can be turned off to keep one run of buttons
 - **Drag reorder** — rearrange task buttons, pinned items hold position across activations
 - **Stable ordering** — tasks stay where they are, no jarring MRU jumps
 - **Minimized windows stay visible** — dimmed in the taskbar (Windows-style), click to restore

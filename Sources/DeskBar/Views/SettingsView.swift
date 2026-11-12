@@ -45,6 +45,7 @@ final class SettingsView: NSView {
     private let middleClickClosesCheckbox = NSButton(checkboxWithTitle: "Middle-click closes", target: nil, action: nil)
     private let showOverFullscreenAppsCheckbox = NSButton(checkboxWithTitle: "Show over full-screen apps", target: nil, action: nil)
     private let showOnAllMonitorsCheckbox = NSButton(checkboxWithTitle: "Show on all monitors", target: nil, action: nil)
+    private let groupWindowsByScreenSideCheckbox = NSButton(checkboxWithTitle: "Group windows by screen side", target: nil, action: nil)
     private let flashAttentionIndicatorsCheckbox = NSButton(checkboxWithTitle: "Flash apps that want attention", target: nil, action: nil)
     private let showProgressIndicatorsCheckbox = NSButton(checkboxWithTitle: "Show app progress indicators", target: nil, action: nil)
     private let enableActivityModeCheckbox = NSButton(checkboxWithTitle: "Activity mode (hold Control for CPU/RAM)", target: nil, action: nil)
@@ -156,6 +157,7 @@ final class SettingsView: NSView {
             makeCheckboxRow(enableActivityModeCheckbox),
             makeCheckboxRow(showOverFullscreenAppsCheckbox),
             makeCheckboxRow(showOnAllMonitorsCheckbox),
+            makeCheckboxRow(groupWindowsByScreenSideCheckbox),
             makeCheckboxRow(enableWindowSwitcherCheckbox),
             makeCheckboxRow(enableBareCommandLauncherCheckbox),
             makeLabeledControlRow(label: "Apps launcher shortcut", control: appsLauncherShortcutPopupButton)
@@ -364,6 +366,9 @@ final class SettingsView: NSView {
         showOverFullscreenAppsCheckbox.target = self
         showOverFullscreenAppsCheckbox.action = #selector(showOverFullscreenAppsChanged(_:))
 
+        groupWindowsByScreenSideCheckbox.target = self
+        groupWindowsByScreenSideCheckbox.action = #selector(groupWindowsByScreenSideChanged(_:))
+
         showOnAllMonitorsCheckbox.target = self
         showOnAllMonitorsCheckbox.action = #selector(showOnAllMonitorsChanged(_:))
 
@@ -569,6 +574,13 @@ final class SettingsView: NSView {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
                 self?.showOverFullscreenAppsCheckbox.state = value ? .on : .off
+            }
+            .store(in: &cancellables)
+
+        settings.$groupWindowsByScreenSide
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.groupWindowsByScreenSideCheckbox.state = value ? .on : .off
             }
             .store(in: &cancellables)
 
@@ -1330,6 +1342,11 @@ final class SettingsView: NSView {
     @objc
     private func showOnAllMonitorsChanged(_ sender: NSButton) {
         settings.showOnAllMonitors = sender.state == .on
+    }
+
+    @objc
+    private func groupWindowsByScreenSideChanged(_ sender: NSButton) {
+        settings.groupWindowsByScreenSide = sender.state == .on
     }
 
     @objc
