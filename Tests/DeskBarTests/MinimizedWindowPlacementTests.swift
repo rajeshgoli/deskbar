@@ -106,3 +106,29 @@ func onlyBusyAppErrorsCountAsTransientEnumerationFailures() {
         #expect(!AccessibilityService.isTransientEnumerationFailure(error))
     }
 }
+
+@Test
+func keepingMinimizedWindowsLeavesThemInTheTaskZoneButNotHiddenOnes() {
+    let windows = [
+        window(cgWindowID: 1),
+        window(cgWindowID: 2, isMinimized: true),
+        window(cgWindowID: 3, isHidden: true)
+    ]
+
+    let taskWindows = windows.filter { WindowManager.belongsInTaskZone($0, keepingMinimized: true) }
+
+    #expect(taskWindows.map(\.cgWindowID) == [1, 2])
+}
+
+@Test
+func keepMinimizedWindowsInTaskbarDefaultsOffAndPersists() {
+    let suiteName = "com.deskbar.tests.keep-minimized.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suiteName)!
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    let settings = TaskbarSettings(defaults: defaults)
+    #expect(!settings.keepMinimizedWindowsInTaskbar)
+
+    settings.keepMinimizedWindowsInTaskbar = true
+    #expect(TaskbarSettings(defaults: defaults).keepMinimizedWindowsInTaskbar)
+}

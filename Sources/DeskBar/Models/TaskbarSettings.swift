@@ -64,6 +64,11 @@ class TaskbarSettings: ObservableObject {
         didSet { defaults.set(dragReorder, forKey: "dragReorder") }
     }
 
+    /// Keeps minimized windows as task buttons in place instead of parking them in the tray.
+    @Published var keepMinimizedWindowsInTaskbar: Bool {
+        didSet { defaults.set(keepMinimizedWindowsInTaskbar, forKey: "keepMinimizedWindowsInTaskbar") }
+    }
+
     @Published var middleClickCloses: Bool {
         didSet { defaults.set(middleClickCloses, forKey: "middleClickCloses") }
     }
@@ -220,6 +225,7 @@ class TaskbarSettings: ObservableObject {
             groupingMode = .never
         }
         dragReorder = defaults.object(forKey: "dragReorder") as? Bool ?? true
+        keepMinimizedWindowsInTaskbar = defaults.object(forKey: "keepMinimizedWindowsInTaskbar") as? Bool ?? false
         middleClickCloses = defaults.object(forKey: "middleClickCloses") as? Bool ?? true
         thumbnailSize = defaults.object(forKey: "thumbnailSize") as? CGFloat ?? Self.defaultThumbnailSize
         hoverDelay = defaults.object(forKey: "hoverDelay") as? TimeInterval ?? 0.4

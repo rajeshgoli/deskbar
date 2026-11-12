@@ -322,7 +322,12 @@ final class WindowManager: ObservableObject {
     /// to the tray as individual items; hidden windows (the app is Cmd-H'd) are covered by the
     /// app-level tray icon instead, since hiding is an application-wide state.
     static func belongsInTaskZone(_ window: WindowInfo) -> Bool {
-        !window.isMinimized && !window.isHidden
+        belongsInTaskZone(window, keepingMinimized: false)
+    }
+
+    /// With `keepingMinimized`, minimized windows keep their task button instead of being parked.
+    static func belongsInTaskZone(_ window: WindowInfo, keepingMinimized: Bool) -> Bool {
+        !window.isHidden && (keepingMinimized || !window.isMinimized)
     }
 
     static func belongsInMinimizedTray(_ window: WindowInfo) -> Bool {

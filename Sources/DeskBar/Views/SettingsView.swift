@@ -42,6 +42,7 @@ final class SettingsView: NSView {
     private let showAllHiddenTrayAppsButton = NSButton(title: "Show All Hidden Apps", target: nil, action: nil)
     private let groupingModePopupButton = NSPopUpButton()
     private let dragReorderCheckbox = NSButton(checkboxWithTitle: "Drag reorder", target: nil, action: nil)
+    private let keepMinimizedWindowsInTaskbarCheckbox = NSButton(checkboxWithTitle: "Keep minimized windows in the taskbar", target: nil, action: nil)
     private let middleClickClosesCheckbox = NSButton(checkboxWithTitle: "Middle-click closes", target: nil, action: nil)
     private let showOverFullscreenAppsCheckbox = NSButton(checkboxWithTitle: "Show over full-screen apps", target: nil, action: nil)
     private let showOnAllMonitorsCheckbox = NSButton(checkboxWithTitle: "Show on all monitors", target: nil, action: nil)
@@ -150,6 +151,7 @@ final class SettingsView: NSView {
             makeLabeledControlRow(label: "Hover delay", control: hoverDelaySlider),
             makeLabeledControlRow(label: "Window grouping", control: groupingModePopupButton),
             makeCheckboxRow(dragReorderCheckbox),
+            makeCheckboxRow(keepMinimizedWindowsInTaskbarCheckbox),
             makeCheckboxRow(middleClickClosesCheckbox),
             makeCheckboxRow(flashAttentionIndicatorsCheckbox),
             makeCheckboxRow(showProgressIndicatorsCheckbox),
@@ -357,6 +359,8 @@ final class SettingsView: NSView {
 
         dragReorderCheckbox.target = self
         dragReorderCheckbox.action = #selector(dragReorderChanged(_:))
+        keepMinimizedWindowsInTaskbarCheckbox.target = self
+        keepMinimizedWindowsInTaskbarCheckbox.action = #selector(keepMinimizedWindowsInTaskbarChanged(_:))
 
         middleClickClosesCheckbox.target = self
         middleClickClosesCheckbox.action = #selector(middleClickClosesChanged(_:))
@@ -555,6 +559,13 @@ final class SettingsView: NSView {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
                 self?.dragReorderCheckbox.state = value ? .on : .off
+            }
+            .store(in: &cancellables)
+
+        settings.$keepMinimizedWindowsInTaskbar
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.keepMinimizedWindowsInTaskbarCheckbox.state = value ? .on : .off
             }
             .store(in: &cancellables)
 
@@ -1315,6 +1326,11 @@ final class SettingsView: NSView {
     @objc
     private func dragReorderChanged(_ sender: NSButton) {
         settings.dragReorder = sender.state == .on
+    }
+
+    @objc
+    private func keepMinimizedWindowsInTaskbarChanged(_ sender: NSButton) {
+        settings.keepMinimizedWindowsInTaskbar = sender.state == .on
     }
 
     @objc
