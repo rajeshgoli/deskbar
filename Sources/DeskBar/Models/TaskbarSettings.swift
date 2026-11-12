@@ -40,8 +40,45 @@ class TaskbarSettings: ObservableObject {
 
     private let defaults: UserDefaults
 
+    /// Icon size and taskbar height depend on each other: the bar is never
+    /// shorter than its icons need. Each slider keeps the value the user chose
+    /// for it, and the other one follows only as far as needed. Larger icons
+    /// make the bar taller, and smaller ones give the chosen height back; a
+    /// lower bar shrinks the icons, and a taller one gives the chosen size back.
+    private var preferredTaskbarHeight: CGFloat
+    private var preferredIconSize: CGFloat
+    /// Set while one of the two values is being adjusted to fit the other, so
+    /// the adjustment is not taken as the user's choice. Assigning a
+    /// @Published property runs its didSet even from inside another didSet.
+    private var isFittingIconsAndHeight = false
+    static let preferredIconSizeKey = "preferredIconSize"
+
     @Published var taskbarHeight: CGFloat {
-        didSet { defaults.set(taskbarHeight, forKey: "taskbarHeight") }
+        didSet {
+            guard !isFittingIconsAndHeight else {
+                return
+            }
+
+            preferredTaskbarHeight = taskbarHeight
+            defaults.set(taskbarHeight, forKey: "taskbarHeight")
+            fitIconsAndHeight {
+                let fittedIconSize = min(preferredIconSize, IconMetrics.largestIconSize(forTaskbarHeight: taskbarHeight))
+                if fittedIconSize != iconSize {
+                    iconSize = fittedIconSize
+                }
+                // Below the smallest usable height, settle on it.
+                let minimum = IconMetrics.minimumTaskbarHeight(forIconSize: iconSize)
+                if taskbarHeight < minimum {
+                    taskbarHeight = minimum
+                }
+            }
+        }
+    }
+
+    private func fitIconsAndHeight(_ body: () -> Void) {
+        isFittingIconsAndHeight = true
+        body()
+        isFittingIconsAndHeight = false
     }
 
     @Published var titleFontSize: CGFloat {
@@ -50,6 +87,41 @@ class TaskbarSettings: ObservableObject {
 
     @Published var maxTaskWidth: CGFloat {
         didSet { defaults.set(maxTaskWidth, forKey: "maxTaskWidth") }
+    }
+
+    @Published var iconSize: CGFloat {
+        didSet {
+            // Views without a TaskbarSettings read the size in effect from here.
+            defaults.set(iconSize, forKey: IconMetrics.iconSizeKey)
+            if !isFittingIconsAndHeight {
+                preferredIconSize = iconSize
+                defaults.set(iconSize, forKey: Self.preferredIconSizeKey)
+                fitIconsAndHeight {
+                    let fittedHeight = max(preferredTaskbarHeight, IconMetrics.minimumTaskbarHeight(forIconSize: iconSize))
+                    if fittedHeight != taskbarHeight {
+                        taskbarHeight = fittedHeight
+                    }
+                }
+            }
+            if iconSize != oldValue {
+                NotificationCenter.default.post(name: IconMetrics.didChange, object: self)
+            }
+        }
+    }
+
+    @Published var itemSpacing: CGFloat {
+        didSet {
+            defaults.set(itemSpacing, forKey: IconMetrics.itemSpacingKey)
+            if itemSpacing != oldValue {
+                NotificationCenter.default.post(name: IconMetrics.didChange, object: self)
+            }
+        }
+    }
+
+    /// With titles hidden, shrink each task button to its icon instead of
+    /// keeping the titled width. Off by default.
+    @Published var compactIconOnlyButtons: Bool {
+        didSet { defaults.set(compactIconOnlyButtons, forKey: "compactIconOnlyButtons") }
     }
 
     @Published var showTitles: Bool {
@@ -207,10 +279,24 @@ class TaskbarSettings: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        taskbarHeight = defaults.object(forKey: "taskbarHeight") as? CGFloat ?? Self.defaultTaskbarHeight
+        preferredTaskbarHeight = defaults.object(forKey: "taskbarHeight") as? CGFloat ?? Self.defaultTaskbarHeight
+        preferredIconSize = IconMetrics.clamp(
+            defaults.object(forKey: Self.preferredIconSizeKey) as? CGFloat ?? IconMetrics.storedIconSize(in: defaults),
+            to: IconMetrics.iconSizeRange
+        )
+        taskbarHeight = max(
+            preferredTaskbarHeight,
+            IconMetrics.minimumTaskbarHeight(forIconSize: IconMetrics.storedIconSize(in: defaults))
+        )
         titleFontSize = defaults.object(forKey: "titleFontSize") as? CGFloat ?? Self.defaultTitleFontSize
         maxTaskWidth = defaults.object(forKey: "maxTaskWidth") as? CGFloat ?? Self.defaultMaxTaskWidth
         showTitles = defaults.object(forKey: "showTitles") as? Bool ?? true
+        compactIconOnlyButtons = defaults.object(forKey: "compactIconOnlyButtons") as? Bool ?? false
+        iconSize = IconMetrics.storedIconSize(in: defaults)
+        itemSpacing = IconMetrics.clamp(
+            defaults.object(forKey: IconMetrics.itemSpacingKey) as? CGFloat ?? IconMetrics.defaultItemSpacing,
+            to: IconMetrics.itemSpacingRange
+        )
         if let rawValue = defaults.string(forKey: "groupingMode"),
            let groupingMode = WindowGroupingMode(rawValue: rawValue) {
             self.groupingMode = groupingMode
@@ -293,6 +379,9 @@ class TaskbarSettings: ObservableObject {
     }
 
     func resetAppearanceSlidersToDefaults() {
+        // Icons first: the height may not go below what the icons need.
+        iconSize = IconMetrics.defaultIconSize
+        itemSpacing = IconMetrics.defaultItemSpacing
         taskbarHeight = Self.defaultTaskbarHeight
         titleFontSize = Self.defaultTitleFontSize
         maxTaskWidth = Self.defaultMaxTaskWidth

@@ -26,8 +26,10 @@ final class AppsLauncherButtonView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    private lazy var iconMetricsBinding = IconMetricsBinding(view: self)
+
     override var intrinsicContentSize: NSSize {
-        NSSize(width: 36, height: 32)
+        NSSize(width: IconMetrics.launcherButtonWidth, height: IconMetrics.rowHeight)
     }
 
     override func updateTrackingAreas() {
@@ -80,13 +82,13 @@ final class AppsLauncherButtonView: NSView {
         addSubview(iconView)
 
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 36),
-            heightAnchor.constraint(equalToConstant: 32),
+            iconMetricsBinding.bind(widthAnchor.constraint(equalToConstant: 36)) { IconMetrics.launcherButtonWidth },
+            iconMetricsBinding.bind(heightAnchor.constraint(equalToConstant: 32)) { IconMetrics.rowHeight },
 
             iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 28),
-            iconView.heightAnchor.constraint(equalToConstant: 28)
+            iconMetricsBinding.bind(iconView.widthAnchor.constraint(equalToConstant: 28)) { IconMetrics.launcherIconSize },
+            iconMetricsBinding.bind(iconView.heightAnchor.constraint(equalToConstant: 28)) { IconMetrics.launcherIconSize }
         ])
     }
 

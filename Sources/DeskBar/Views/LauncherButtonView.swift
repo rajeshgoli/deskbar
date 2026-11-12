@@ -57,8 +57,10 @@ final class LauncherButtonView: NSView {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    private lazy var iconMetricsBinding = IconMetricsBinding(view: self)
+
     override var intrinsicContentSize: NSSize {
-        NSSize(width: 36, height: 32)
+        NSSize(width: IconMetrics.launcherButtonWidth, height: IconMetrics.rowHeight)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -93,12 +95,12 @@ final class LauncherButtonView: NSView {
         addSubview(iconView)
 
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 36),
+            iconMetricsBinding.bind(widthAnchor.constraint(equalToConstant: 36)) { IconMetrics.launcherButtonWidth },
 
             iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 28),
-            iconView.heightAnchor.constraint(equalToConstant: 28)
+            iconMetricsBinding.bind(iconView.widthAnchor.constraint(equalToConstant: 28)) { IconMetrics.launcherIconSize },
+            iconMetricsBinding.bind(iconView.heightAnchor.constraint(equalToConstant: 28)) { IconMetrics.launcherIconSize }
         ])
     }
 
@@ -117,18 +119,18 @@ final class LauncherButtonView: NSView {
 
     private func resolvedIcon() -> NSImage? {
         if let icon = pinnedApp.icon {
-            return icon.scaled(to: NSSize(width: 32, height: 32))
+            return icon.scaled(to: IconMetrics.iconRenderSize)
         }
 
         if let icon = runningApplication?.icon {
-            return icon.scaled(to: NSSize(width: 32, height: 32))
+            return icon.scaled(to: IconMetrics.iconRenderSize)
         }
 
         guard let applicationURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: pinnedApp.bundleIdentifier) else {
             return nil
         }
 
-        return NSWorkspace.shared.icon(forFile: applicationURL.path).scaled(to: NSSize(width: 32, height: 32))
+        return NSWorkspace.shared.icon(forFile: applicationURL.path).scaled(to: IconMetrics.iconRenderSize)
     }
 
     private func actionForPrimaryClick() -> LauncherActivationAction {

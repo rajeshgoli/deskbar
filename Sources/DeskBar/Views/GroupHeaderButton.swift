@@ -45,8 +45,10 @@ final class GroupHeaderButton: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    private lazy var iconMetricsBinding = IconMetricsBinding(view: self)
+
     override var intrinsicContentSize: NSSize {
-        NSSize(width: 40, height: 32)
+        NSSize(width: IconMetrics.groupHeaderWidth, height: IconMetrics.rowHeight)
     }
 
     override func updateTrackingAreas() {
@@ -97,13 +99,13 @@ final class GroupHeaderButton: NSView {
         badgeView.addSubview(badgeLabel)
 
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 40),
-            heightAnchor.constraint(equalToConstant: 32),
+            iconMetricsBinding.bind(widthAnchor.constraint(equalToConstant: 40)) { IconMetrics.groupHeaderWidth },
+            iconMetricsBinding.bind(heightAnchor.constraint(equalToConstant: 32)) { IconMetrics.rowHeight },
 
             iconView.centerXAnchor.constraint(equalTo: centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconView.widthAnchor.constraint(equalToConstant: 24),
-            iconView.heightAnchor.constraint(equalToConstant: 24),
+            iconMetricsBinding.bind(iconView.widthAnchor.constraint(equalToConstant: 24)) { IconMetrics.iconSize },
+            iconMetricsBinding.bind(iconView.heightAnchor.constraint(equalToConstant: 24)) { IconMetrics.iconSize },
 
             badgeView.topAnchor.constraint(equalTo: topAnchor, constant: 3),
             badgeView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -3),

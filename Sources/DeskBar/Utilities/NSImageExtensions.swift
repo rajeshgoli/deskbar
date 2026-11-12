@@ -40,18 +40,23 @@ extension NSImage {
 
     /// Draw a notification dot overlay (top-right corner)
     func withBadgeDot(dotSize: CGFloat = 6, color: NSColor = .systemRed) -> NSImage {
-        let newImage = NSImage(size: self.size)
-        newImage.lockFocus()
-        self.draw(in: NSRect(origin: .zero, size: self.size))
-        let dotRect = NSRect(
-            x: self.size.width - dotSize - 1,
-            y: self.size.height - dotSize - 1,
-            width: dotSize,
-            height: dotSize
-        )
-        color.setFill()
-        NSBezierPath(ovalIn: dotRect).fill()
-        newImage.unlockFocus()
-        return newImage
+        // Drawn on demand at whatever size the image is displayed, so the icon
+        // stays sharp when the icon size setting scales it up. A bitmap made
+        // with lockFocus would be fixed at the source icon's 32 pt.
+        let baseSize = size
+        return NSImage(size: baseSize, flipped: false) { rect in
+            self.draw(in: rect)
+            let scale = rect.width / max(baseSize.width, 1)
+            let scaledDot = dotSize * scale
+            let dotRect = NSRect(
+                x: rect.maxX - scaledDot - scale,
+                y: rect.maxY - scaledDot - scale,
+                width: scaledDot,
+                height: scaledDot
+            )
+            color.setFill()
+            NSBezierPath(ovalIn: dotRect).fill()
+            return true
+        }
     }
 }
