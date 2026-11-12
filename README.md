@@ -13,7 +13,7 @@ Lightweight, native, no external dependencies. Does not modify any system settin
 ## Features
 
 - **Three-zone layout** — Launcher (pinned apps) | Task Zone (windows) | Running-App Tray
-- **System resource widget** — collapsible MEM/CPU/GPU widget with per-metric toggles and Activity Monitor history shortcuts
+- **System resource widget** — collapsible MEM/CPU/GPU widget with per-metric toggles, Activity Monitor history shortcuts, and adjustable size and bar width
 - **Per-window switching** — click a task button to raise that specific window, not all windows from the app
 - **AltTab-style window switcher** — Option+Tab cycles individual windows with a bold glass thumbnail overlay
 - **Dock-style right-click menus** — task and launcher menus expose windows plus Show All Windows, Hide, Quit, and launcher options

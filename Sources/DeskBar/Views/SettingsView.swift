@@ -54,6 +54,20 @@ final class SettingsView: NSView {
     private let showSystemResourceGPUMetricCheckbox = NSButton(checkboxWithTitle: "GPU usage", target: nil, action: nil)
     private let showSystemResourceNetworkMetricCheckbox = NSButton(checkboxWithTitle: "Network speed and Ethernet health", target: nil, action: nil)
     private let systemResourceWidgetLocationPopupButton = NSPopUpButton()
+    private let resourceWidgetBarWidthSlider = NSSlider(
+        value: 100,
+        minValue: Double(TaskbarSettings.resourceWidgetBarWidthRange.lowerBound * 100),
+        maxValue: Double(TaskbarSettings.resourceWidgetBarWidthRange.upperBound * 100),
+        target: nil,
+        action: nil
+    )
+    private let resourceWidgetScaleSlider = NSSlider(
+        value: 100,
+        minValue: Double(TaskbarSettings.resourceWidgetScaleRange.lowerBound * 100),
+        maxValue: Double(TaskbarSettings.resourceWidgetScaleRange.upperBound * 100),
+        target: nil,
+        action: nil
+    )
     private let systemResourceWidgetDisplayPopupButton = NSPopUpButton()
     private let showSessionManagerWidgetCheckbox = NSButton(checkboxWithTitle: "Show SM widget", target: nil, action: nil)
     private let sessionManagerWidgetDisplayPopupButton = NSPopUpButton()
@@ -171,6 +185,8 @@ final class SettingsView: NSView {
             makeCheckboxRow(showSystemResourceCPUMetricCheckbox),
             makeCheckboxRow(showSystemResourceGPUMetricCheckbox),
             makeCheckboxRow(showSystemResourceNetworkMetricCheckbox),
+            makeLabeledControlRow(label: "Widget size", control: resourceWidgetScaleSlider),
+            makeLabeledControlRow(label: "Usage bar width", control: resourceWidgetBarWidthSlider),
             makeCheckboxRow(showSessionManagerWidgetCheckbox),
             makeLabeledControlRow(label: "SM widget show on", control: sessionManagerWidgetDisplayPopupButton)
         ])
@@ -390,6 +406,12 @@ final class SettingsView: NSView {
 
         showSystemResourceNetworkMetricCheckbox.target = self
         showSystemResourceNetworkMetricCheckbox.action = #selector(showSystemResourceNetworkMetricChanged(_:))
+        resourceWidgetScaleSlider.target = self
+        resourceWidgetScaleSlider.action = #selector(resourceWidgetScaleChanged(_:))
+        resourceWidgetBarWidthSlider.target = self
+        resourceWidgetBarWidthSlider.action = #selector(resourceWidgetBarWidthChanged(_:))
+        resourceWidgetBarWidthSlider.toolTip = "Width of the memory, CPU and GPU bars. 0 % shows only the numbers."
+        resourceWidgetScaleSlider.toolTip = "100–200 %. On a short taskbar the widget only grows as far as the bar's height allows."
 
         systemResourceWidgetLocationPopupButton.target = self
         systemResourceWidgetLocationPopupButton.action = #selector(systemResourceWidgetLocationChanged(_:))
@@ -633,6 +655,20 @@ final class SettingsView: NSView {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
                 self?.showSystemResourceNetworkMetricCheckbox.state = value ? .on : .off
+            }
+            .store(in: &cancellables)
+
+        settings.$resourceWidgetBarWidth
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.resourceWidgetBarWidthSlider.doubleValue = Double(value * 100)
+            }
+            .store(in: &cancellables)
+
+        settings.$resourceWidgetScale
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.resourceWidgetScaleSlider.doubleValue = Double(value * 100)
             }
             .store(in: &cancellables)
 
@@ -1039,6 +1075,9 @@ final class SettingsView: NSView {
         showSystemResourceCPUMetricCheckbox.isEnabled = isEnabled
         showSystemResourceGPUMetricCheckbox.isEnabled = isEnabled
         showSystemResourceNetworkMetricCheckbox.isEnabled = isEnabled
+        // Both only size the taskbar widget, not the menu bar item.
+        resourceWidgetScaleSlider.isEnabled = settings.showsSystemResourceWidgetInTaskbar
+        resourceWidgetBarWidthSlider.isEnabled = settings.showsSystemResourceWidgetInTaskbar
 
         let isSMWidgetEnabled = settings.enableSessionManagerPlugin && settings.showSessionManagerWidget
         showSessionManagerWidgetCheckbox.isEnabled = settings.enableSessionManagerPlugin
@@ -1370,6 +1409,24 @@ final class SettingsView: NSView {
     @objc
     private func showSystemResourceNetworkMetricChanged(_ sender: NSButton) {
         settings.showSystemResourceNetworkMetric = sender.state == .on
+    }
+
+    @objc
+    private func resourceWidgetBarWidthChanged(_ sender: NSSlider) {
+        // Whole percent steps, so dragging does not relayout for every pixel.
+        let width = CGFloat(sender.doubleValue.rounded()) / 100
+        if width != settings.resourceWidgetBarWidth {
+            settings.resourceWidgetBarWidth = width
+        }
+    }
+
+    @objc
+    private func resourceWidgetScaleChanged(_ sender: NSSlider) {
+        // Whole percent steps, so dragging does not relayout for every pixel.
+        let scale = CGFloat(sender.doubleValue.rounded()) / 100
+        if scale != settings.resourceWidgetScale {
+            settings.resourceWidgetScale = scale
+        }
     }
 
     @objc

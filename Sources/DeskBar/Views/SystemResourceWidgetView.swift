@@ -4,13 +4,11 @@ import Combine
 final class SystemResourceWidgetView: NSView {
     private static let separatorWidth: CGFloat = 1
     private static let separatorHeight: CGFloat = 24
-    private static let memoryWidth: CGFloat = 170
-    private static let metricWidth: CGFloat = 125
-    private static let networkWidth: CGFloat = 130
     private static let collapseWidth: CGFloat = 28
     private static let widgetHeight: CGFloat = 32
     private static let stackSpacing: CGFloat = 8
     private static let leadingInset: CGFloat = 4
+    private static let collapseSymbolPointSize: CGFloat = 13
 
     private let settings: TaskbarSettings
     private let monitor: SystemResourceMonitor
@@ -24,6 +22,10 @@ final class SystemResourceWidgetView: NSView {
     private let collapseButton = NSButton()
     private var widthConstraint: NSLayoutConstraint?
     private var cancellables = Set<AnyCancellable>()
+    /// Size constraints and their size at scale 1, see `apply(scale:barWidth:)`.
+    private var scaledConstraints: [(constraint: NSLayoutConstraint, base: () -> CGFloat)] = []
+    private var scale: CGFloat = 1
+    private var barWidth: CGFloat = 1
 
     var preferredWidthDidChange: (() -> Void)?
 
@@ -56,7 +58,7 @@ final class SystemResourceWidgetView: NSView {
     }
 
     override var intrinsicContentSize: NSSize {
-        isHidden ? .zero : NSSize(width: expandedContentWidth(), height: Self.widgetHeight)
+        isHidden ? .zero : NSSize(width: expandedContentWidth(), height: Self.widgetHeight * scale)
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -90,15 +92,15 @@ final class SystemResourceWidgetView: NSView {
         stackView.addArrangedSubview(networkControl)
         NSLayoutConstraint.activate([
             separatorView.widthAnchor.constraint(equalToConstant: Self.separatorWidth),
-            separatorView.heightAnchor.constraint(equalToConstant: Self.separatorHeight),
-            memoryControl.widthAnchor.constraint(equalToConstant: Self.memoryWidth),
-            cpuControl.widthAnchor.constraint(equalToConstant: Self.metricWidth),
-            gpuControl.widthAnchor.constraint(equalToConstant: Self.metricWidth),
-            networkControl.widthAnchor.constraint(equalToConstant: Self.networkWidth),
-            memoryControl.heightAnchor.constraint(equalToConstant: Self.widgetHeight),
-            cpuControl.heightAnchor.constraint(equalToConstant: Self.widgetHeight),
-            gpuControl.heightAnchor.constraint(equalToConstant: Self.widgetHeight),
-            networkControl.heightAnchor.constraint(equalToConstant: Self.widgetHeight)
+            scaled(separatorView.heightAnchor, Self.separatorHeight),
+            scaled(memoryControl.widthAnchor) { [unowned self] in SystemResourceMetric.memory.controlWidth(barWidth: barWidth) },
+            scaled(cpuControl.widthAnchor) { [unowned self] in SystemResourceMetric.cpu.controlWidth(barWidth: barWidth) },
+            scaled(gpuControl.widthAnchor) { [unowned self] in SystemResourceMetric.gpu.controlWidth(barWidth: barWidth) },
+            scaled(networkControl.widthAnchor) { [unowned self] in SystemResourceMetric.network.controlWidth(barWidth: barWidth) },
+            scaled(memoryControl.heightAnchor, Self.widgetHeight),
+            scaled(cpuControl.heightAnchor, Self.widgetHeight),
+            scaled(gpuControl.heightAnchor, Self.widgetHeight),
+            scaled(networkControl.heightAnchor, Self.widgetHeight)
         ])
 
         configureIconButton(
@@ -111,15 +113,45 @@ final class SystemResourceWidgetView: NSView {
         let widthConstraint = widthAnchor.constraint(equalToConstant: expandedContentWidth())
         self.widthConstraint = widthConstraint
         NSLayoutConstraint.activate([
-            collapseButton.widthAnchor.constraint(equalToConstant: Self.collapseWidth),
-            collapseButton.heightAnchor.constraint(equalToConstant: Self.collapseWidth),
+            scaled(collapseButton.widthAnchor, Self.collapseWidth),
+            scaled(collapseButton.heightAnchor, Self.collapseWidth),
             stackView.leadingAnchor.constraint(equalTo: leadingAnchor),
             stackView.trailingAnchor.constraint(equalTo: trailingAnchor),
             stackView.topAnchor.constraint(equalTo: topAnchor),
             stackView.bottomAnchor.constraint(equalTo: bottomAnchor),
             widthConstraint,
-            heightAnchor.constraint(equalToConstant: Self.widgetHeight)
+            scaled(heightAnchor, Self.widgetHeight)
         ])
+    }
+
+    private func scaled(_ dimension: NSLayoutDimension, _ base: CGFloat) -> NSLayoutConstraint {
+        scaled(dimension) { base }
+    }
+
+    private func scaled(_ dimension: NSLayoutDimension, _ base: @escaping () -> CGFloat) -> NSLayoutConstraint {
+        let constraint = dimension.constraint(equalToConstant: base() * scale)
+        scaledConstraints.append((constraint, base))
+        return constraint
+    }
+
+    private func apply(scale newScale: CGFloat, barWidth newBarWidth: CGFloat) {
+        guard newScale != scale || newBarWidth != barWidth else {
+            return
+        }
+
+        scale = newScale
+        barWidth = newBarWidth
+        scaledConstraints.forEach { $0.constraint.constant = $0.base() * newScale }
+        stackView.spacing = Self.stackSpacing * newScale
+        stackView.edgeInsets.left = Self.leadingInset * newScale
+        collapseButton.symbolConfiguration = NSImage.SymbolConfiguration(
+            pointSize: Self.collapseSymbolPointSize * newScale,
+            weight: .regular
+        )
+        [memoryControl, cpuControl, gpuControl, networkControl].forEach {
+            $0.apply(scale: newScale, barWidth: newBarWidth)
+        }
+        updateMetricVisibility()
     }
 
     private func configureIconButton(
@@ -170,6 +202,17 @@ final class SystemResourceWidgetView: NSView {
             .receive(on: RunLoop.main)
             .sink { [weak self] snapshot in
                 self?.update(with: snapshot)
+            }
+            .store(in: &cancellables)
+
+        settings.$resourceWidgetScale
+            .combineLatest(settings.$taskbarHeight, settings.$resourceWidgetBarWidth)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] scale, taskbarHeight, barWidth in
+                self?.apply(
+                    scale: TaskbarSettings.effectiveResourceWidgetScale(scale: scale, taskbarHeight: taskbarHeight),
+                    barWidth: barWidth
+                )
             }
             .store(in: &cancellables)
 
@@ -300,21 +343,22 @@ final class SystemResourceWidgetView: NSView {
 
         var widths: [CGFloat] = [Self.separatorWidth]
         if settings.showSystemResourceMemoryMetric {
-            widths.append(Self.memoryWidth)
+            widths.append(SystemResourceMetric.memory.controlWidth(barWidth: barWidth))
         }
         if settings.showSystemResourceCPUMetric {
-            widths.append(Self.metricWidth)
+            widths.append(SystemResourceMetric.cpu.controlWidth(barWidth: barWidth))
         }
         if settings.showSystemResourceGPUMetric {
-            widths.append(Self.metricWidth)
+            widths.append(SystemResourceMetric.gpu.controlWidth(barWidth: barWidth))
         }
         if settings.showSystemResourceNetworkMetric {
-            widths.append(Self.networkWidth)
+            widths.append(SystemResourceMetric.network.controlWidth(barWidth: barWidth))
         }
         widths.append(Self.collapseWidth)
 
         let spacing = CGFloat(max(widths.count - 1, 0)) * Self.stackSpacing
-        return Self.leadingInset + widths.reduce(0, +) + spacing
+        // The 1 pt separator stays a hairline at every scale.
+        return (Self.leadingInset + widths.reduce(0, +) + spacing - Self.separatorWidth) * scale + Self.separatorWidth
     }
 
     private func makeContextMenu() -> NSMenu {
@@ -583,6 +627,12 @@ private final class SystemResourceMetricControl: NSControl {
     private var fillWidthConstraint: NSLayoutConstraint?
     private var fraction: Double?
     private var fillColor = NSColor.controlAccentColor
+    private var scale: CGFloat = 1
+    private var barWidth: CGFloat = 1
+    private var scaledConstraints: [(constraint: NSLayoutConstraint, base: () -> CGFloat)] = []
+    private static let titleFontSize: CGFloat = 10
+    private static let valueFontSize: CGFloat = 11
+    private static let trackCornerRadius: CGFloat = 4
 
     init(metric: SystemResourceMetric) {
         self.metric = metric
@@ -600,7 +650,7 @@ private final class SystemResourceMetricControl: NSControl {
     }
 
     override var intrinsicContentSize: NSSize {
-        NSSize(width: metric.controlWidth, height: 32)
+        NSSize(width: metric.controlWidth(barWidth: barWidth) * scale, height: 32 * scale)
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
@@ -630,12 +680,12 @@ private final class SystemResourceMetricControl: NSControl {
 
     private func configureSubviews() {
         titleLabel.stringValue = metric.shortTitle
-        titleLabel.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .bold)
+        titleLabel.font = NSFont.monospacedSystemFont(ofSize: Self.titleFontSize, weight: .bold)
         titleLabel.textColor = .secondaryLabelColor
         titleLabel.alignment = .left
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        valueLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .semibold)
+        valueLabel.font = NSFont.monospacedSystemFont(ofSize: Self.valueFontSize, weight: .semibold)
         valueLabel.textColor = .labelColor
         valueLabel.alignment = .left
         valueLabel.lineBreakMode = .byTruncatingTail
@@ -661,14 +711,19 @@ private final class SystemResourceMetricControl: NSControl {
         NSLayoutConstraint.activate([
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            titleLabel.widthAnchor.constraint(equalToConstant: 28),
+            scaled(titleLabel.widthAnchor.constraint(equalToConstant: 28)),
 
-            trackView.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 8),
+            scaled(trackView.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 8)),
             trackView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            trackView.widthAnchor.constraint(equalToConstant: metric.trackWidth),
-            trackView.heightAnchor.constraint(equalToConstant: metric.trackHeight),
+            scaled(trackView.widthAnchor.constraint(equalToConstant: metric.trackWidth)) { [unowned self] in
+                metric.trackWidth(barWidth: barWidth)
+            },
+            scaled(trackView.heightAnchor.constraint(equalToConstant: metric.trackHeight)),
 
-            valueLabel.leadingAnchor.constraint(equalTo: trackView.trailingAnchor, constant: 8),
+            // Without a bar, one 8 pt gap separates the title and the value.
+            scaled(valueLabel.leadingAnchor.constraint(equalTo: trackView.trailingAnchor, constant: 8)) { [unowned self] in
+                metric.trackWidth(barWidth: barWidth) > 0 ? 8 : 0
+            },
             valueLabel.trailingAnchor.constraint(equalTo: trailingAnchor),
             valueLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
 
@@ -677,6 +732,34 @@ private final class SystemResourceMetricControl: NSControl {
             fillView.bottomAnchor.constraint(equalTo: trackView.bottomAnchor),
             fillWidthConstraint
         ])
+    }
+
+    private func scaled(_ constraint: NSLayoutConstraint) -> NSLayoutConstraint {
+        let base = constraint.constant
+        return scaled(constraint) { base }
+    }
+
+    private func scaled(_ constraint: NSLayoutConstraint, _ base: @escaping () -> CGFloat) -> NSLayoutConstraint {
+        scaledConstraints.append((constraint, base))
+        return constraint
+    }
+
+    func apply(scale newScale: CGFloat, barWidth newBarWidth: CGFloat) {
+        scale = newScale
+        barWidth = newBarWidth
+        scaledConstraints.forEach { $0.constraint.constant = $0.base() * newScale }
+        trackView.isHidden = metric.trackWidth(barWidth: newBarWidth) == 0
+        titleLabel.font = NSFont.monospacedSystemFont(ofSize: Self.titleFontSize * newScale, weight: .bold)
+        valueLabel.font = NSFont.monospacedSystemFont(ofSize: Self.valueFontSize * newScale, weight: .semibold)
+        // Never more than half the bar, so a narrow bar stays a rounded bar.
+        let cornerRadius = min(
+            Self.trackCornerRadius * newScale,
+            metric.trackWidth(barWidth: newBarWidth) * newScale / 2
+        )
+        trackView.layer?.cornerRadius = cornerRadius
+        fillView.layer?.cornerRadius = cornerRadius
+        invalidateIntrinsicContentSize()
+        needsLayout = true
     }
 
     private func updateColors(severity: SystemResourceMetricSeverity) {
@@ -710,7 +793,7 @@ private final class SystemResourceMetricControl: NSControl {
     }
 }
 
-private extension SystemResourceMetric {
+extension SystemResourceMetric {
     var shortTitle: String {
         switch self {
         case .memory:
@@ -749,5 +832,27 @@ private extension SystemResourceMetric {
 
     var trackHeight: CGFloat {
         self == .network ? 8 : 10
+    }
+
+    /// Network's dot is a status light, not a usage bar, so it keeps its size.
+    var hasUsageBar: Bool {
+        self != .network
+    }
+
+    /// The usage bar's width with the bars drawn at `barWidth` of their normal
+    /// width (0 hides them).
+    func trackWidth(barWidth: CGFloat) -> CGFloat {
+        hasUsageBar ? trackWidth * barWidth : trackWidth
+    }
+
+    /// The control's width once the bar has shrunk: the room the bar gives up,
+    /// and its 8 pt gap when it is hidden, comes off the control.
+    func controlWidth(barWidth: CGFloat) -> CGFloat {
+        guard hasUsageBar else {
+            return controlWidth
+        }
+
+        let freed = trackWidth - trackWidth(barWidth: barWidth)
+        return controlWidth - freed - (trackWidth(barWidth: barWidth) == 0 ? 8 : 0)
     }
 }
