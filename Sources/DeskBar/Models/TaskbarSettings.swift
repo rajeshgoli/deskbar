@@ -161,6 +161,11 @@ class TaskbarSettings: ObservableObject {
         didSet { defaults.set(startAtLogin, forKey: "startAtLogin") }
     }
 
+    /// Put windows that fill the left or right half of the screen in their own taskbar groups. On by default.
+    @Published var groupWindowsByScreenSide: Bool {
+        didSet { defaults.set(groupWindowsByScreenSide, forKey: "groupWindowsByScreenSide") }
+    }
+
     @Published var showOnAllMonitors: Bool {
         didSet { defaults.set(showOnAllMonitors, forKey: "showOnAllMonitors") }
     }
@@ -252,6 +257,7 @@ class TaskbarSettings: ObservableObject {
         }
         startAtLogin = defaults.object(forKey: "startAtLogin") as? Bool ?? false
         showOnAllMonitors = defaults.object(forKey: "showOnAllMonitors") as? Bool ?? true
+        groupWindowsByScreenSide = defaults.object(forKey: "groupWindowsByScreenSide") as? Bool ?? true
         layoutMode = DeskBarLayoutMode(rawValue: defaults.string(forKey: "layoutMode") ?? "") ?? .fullWidth
         enableWindowSwitcher = defaults.object(forKey: "enableWindowSwitcher") as? Bool ?? false
         enableBareCommandLauncher = defaults.object(forKey: "enableBareCommandLauncher") as? Bool ?? false

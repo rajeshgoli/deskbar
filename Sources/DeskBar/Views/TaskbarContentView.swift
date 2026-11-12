@@ -595,6 +595,14 @@ final class TaskbarContentView: NSView {
             }
             .store(in: &cancellables)
 
+        settings.$groupWindowsByScreenSide
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.rebuildTaskZone()
+            }
+            .store(in: &cancellables)
+
         settings.$maxTaskWidth
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -1117,7 +1125,22 @@ final class TaskbarContentView: NSView {
         }
     }
 
+    /// The task zone group a window goes in: the side of the screen it fills,
+    /// or the middle group for every window when grouping by side is off.
+    static func taskbarZone(
+        groupingByScreenSide: Bool,
+        sideZone: () -> TaskbarWindowZone
+    ) -> TaskbarWindowZone {
+        groupingByScreenSide ? sideZone() : .neutral
+    }
+
     private func taskbarZone(for window: WindowInfo, on screen: NSScreen?) -> TaskbarWindowZone {
+        Self.taskbarZone(groupingByScreenSide: settings.groupWindowsByScreenSide) {
+            screenSideZone(for: window, on: screen)
+        }
+    }
+
+    private func screenSideZone(for window: WindowInfo, on screen: NSScreen?) -> TaskbarWindowZone {
         guard let screen else {
             return .neutral
         }
