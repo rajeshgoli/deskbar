@@ -30,6 +30,7 @@ Lightweight, native, no external dependencies. Does not modify any system settin
 - **Blacklist** — hide apps you don't want in the taskbar
 - **Badge dots** — best-effort notification indicators
 - **Smooth animations** — fade in/out on window appear/disappear
+- **Custom background** — optionally replace the translucent material with a colour of your choice, from solid to fully transparent
 - **Accessibility graceful degradation** — works in reduced mode without AX permission
 
 ## Install

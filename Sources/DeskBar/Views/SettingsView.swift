@@ -35,6 +35,12 @@ final class SettingsView: NSView {
     private let maxTaskWidthSlider = NSSlider(value: 200, minValue: 100, maxValue: 400, target: nil, action: nil)
     private let showTitlesCheckbox = NSButton(checkboxWithTitle: "Show titles", target: nil, action: nil)
     private let thumbnailSizeSlider = NSSlider(value: 200, minValue: 100, maxValue: 400, target: nil, action: nil)
+    private let useCustomBackgroundColorCheckbox = NSButton(
+        checkboxWithTitle: "Use a custom background color",
+        target: nil,
+        action: nil
+    )
+    private let backgroundColorWell = NSColorWell()
     private let resetAppearanceSlidersButton = NSButton(title: "Reset Sliders to Defaults", target: nil, action: nil)
 
     private let hoverDelaySlider = NSSlider(value: 400, minValue: 100, maxValue: 1000, target: nil, action: nil)
@@ -139,6 +145,8 @@ final class SettingsView: NSView {
             makeLabeledControlRow(label: "Max task width", control: maxTaskWidthSlider),
             makeCheckboxRow(showTitlesCheckbox),
             makeLabeledControlRow(label: "Thumbnail size", control: thumbnailSizeSlider),
+            makeCheckboxRow(useCustomBackgroundColorCheckbox),
+            makeLabeledControlRow(label: "Background color", control: backgroundColorWell),
             makeButtonRow(resetAppearanceSlidersButton)
         ])
 
@@ -343,6 +351,12 @@ final class SettingsView: NSView {
         showTitlesCheckbox.target = self
         showTitlesCheckbox.action = #selector(showTitlesChanged(_:))
 
+        useCustomBackgroundColorCheckbox.target = self
+        useCustomBackgroundColorCheckbox.action = #selector(useCustomBackgroundColorChanged(_:))
+
+        backgroundColorWell.target = self
+        backgroundColorWell.action = #selector(backgroundColorChanged(_:))
+
         thumbnailSizeSlider.target = self
         thumbnailSizeSlider.action = #selector(thumbnailSizeChanged(_:))
 
@@ -517,6 +531,22 @@ final class SettingsView: NSView {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
                 self?.showTitlesCheckbox.state = value ? .on : .off
+            }
+            .store(in: &cancellables)
+
+        settings.$useCustomBackgroundColor
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.useCustomBackgroundColorCheckbox.state = value ? .on : .off
+                self?.backgroundColorWell.isEnabled = value
+            }
+            .store(in: &cancellables)
+
+        settings.$backgroundColor
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                guard let self, StoredColor(self.backgroundColorWell.color) != value else { return }
+                self.backgroundColorWell.color = value.nsColor
             }
             .store(in: &cancellables)
 
@@ -1273,6 +1303,16 @@ final class SettingsView: NSView {
     @objc
     private func showTitlesChanged(_ sender: NSButton) {
         settings.showTitles = sender.state == .on
+    }
+
+    @objc
+    private func useCustomBackgroundColorChanged(_ sender: NSButton) {
+        settings.useCustomBackgroundColor = sender.state == .on
+    }
+
+    @objc
+    private func backgroundColorChanged(_ sender: NSColorWell) {
+        settings.backgroundColor = StoredColor(sender.color)
     }
 
     @objc
