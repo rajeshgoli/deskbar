@@ -184,6 +184,8 @@ final class TaskButtonView: NSView, NSDraggingSource {
     private let settings: TaskbarSettings
     private var windowInfo: WindowInfo
     private var hasBadge: Bool
+    /// The unread count drawn last, so a new count redraws the icon.
+    private var renderedBadgeLabel: String?
     private var isAccessibilityAvailable: Bool
     private var runtimeState: AppRuntimeState
     private var showsActivityOverlay: Bool
@@ -1205,6 +1207,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
 
         let appearanceChanged = self.windowInfo != windowInfo || self.isActive != isActive ||
             self.hasBadge != hasBadge || self.isAccessibilityAvailable != isAccessibilityAvailable ||
+            renderedBadgeLabel != UnreadBadges.label(for: windowInfo.bundleIdentifier) ||
             self.runtimeState != runtimeState || self.showsActivityOverlay != showsActivityOverlay ||
             self.agentAnnotation != agentAnnotation ||
             !TaskButtonPluginMenuConfiguration.sameAppearance(self.pluginMenuConfiguration, pluginMenuConfiguration)
@@ -1216,6 +1219,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         self.windowInfo = windowInfo
         self.isActive = isActive
         self.hasBadge = hasBadge
+        renderedBadgeLabel = UnreadBadges.label(for: windowInfo.bundleIdentifier)
         self.isAccessibilityAvailable = isAccessibilityAvailable
         self.runtimeState = runtimeState
         self.showsActivityOverlay = showsActivityOverlay
@@ -1363,7 +1367,7 @@ final class TaskButtonView: NSView, NSDraggingSource {
         }
 
         if hasBadge {
-            return baseIcon.withBadgeDot()
+            return baseIcon.withUnreadBadge(for: windowInfo.bundleIdentifier)
         }
 
         return baseIcon

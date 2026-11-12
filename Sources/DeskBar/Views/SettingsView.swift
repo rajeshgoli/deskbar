@@ -46,6 +46,7 @@ final class SettingsView: NSView {
     private let showOverFullscreenAppsCheckbox = NSButton(checkboxWithTitle: "Show over full-screen apps", target: nil, action: nil)
     private let showOnAllMonitorsCheckbox = NSButton(checkboxWithTitle: "Show on all monitors", target: nil, action: nil)
     private let flashAttentionIndicatorsCheckbox = NSButton(checkboxWithTitle: "Flash apps that want attention", target: nil, action: nil)
+    private let showUnreadCountsCheckbox = NSButton(checkboxWithTitle: "Show unread counts on app icons", target: nil, action: nil)
     private let showProgressIndicatorsCheckbox = NSButton(checkboxWithTitle: "Show app progress indicators", target: nil, action: nil)
     private let enableActivityModeCheckbox = NSButton(checkboxWithTitle: "Activity mode (hold Control for CPU/RAM)", target: nil, action: nil)
     private let showSystemResourceWidgetCheckbox = NSButton(checkboxWithTitle: "Show system resource widget", target: nil, action: nil)
@@ -152,6 +153,7 @@ final class SettingsView: NSView {
             makeCheckboxRow(dragReorderCheckbox),
             makeCheckboxRow(middleClickClosesCheckbox),
             makeCheckboxRow(flashAttentionIndicatorsCheckbox),
+            makeCheckboxRow(showUnreadCountsCheckbox),
             makeCheckboxRow(showProgressIndicatorsCheckbox),
             makeCheckboxRow(enableActivityModeCheckbox),
             makeCheckboxRow(showOverFullscreenAppsCheckbox),
@@ -367,6 +369,9 @@ final class SettingsView: NSView {
         showOnAllMonitorsCheckbox.target = self
         showOnAllMonitorsCheckbox.action = #selector(showOnAllMonitorsChanged(_:))
 
+        showUnreadCountsCheckbox.target = self
+        showUnreadCountsCheckbox.action = #selector(showUnreadCountsChanged(_:))
+
         flashAttentionIndicatorsCheckbox.target = self
         flashAttentionIndicatorsCheckbox.action = #selector(flashAttentionIndicatorsChanged(_:))
 
@@ -576,6 +581,13 @@ final class SettingsView: NSView {
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
                 self?.showOnAllMonitorsCheckbox.state = value ? .on : .off
+            }
+            .store(in: &cancellables)
+
+        settings.$showUnreadCounts
+            .receive(on: RunLoop.main)
+            .sink { [weak self] value in
+                self?.showUnreadCountsCheckbox.state = value ? .on : .off
             }
             .store(in: &cancellables)
 
@@ -1335,6 +1347,11 @@ final class SettingsView: NSView {
     @objc
     private func flashAttentionIndicatorsChanged(_ sender: NSButton) {
         settings.flashAttentionIndicators = sender.state == .on
+    }
+
+    @objc
+    private func showUnreadCountsChanged(_ sender: NSButton) {
+        settings.showUnreadCounts = sender.state == .on
     }
 
     @objc

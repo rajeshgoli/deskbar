@@ -4,8 +4,18 @@ import Combine
 
 final class BadgeMonitor: ObservableObject {
     @Published var appBadges: [String: Bool] = [:]
+    /// Dock badge text per app (such as an unread count). Empty when the
+    /// badge has no text.
+    @Published var appBadgeLabels: [String: String] = [:]
 
-    private let pollInterval: TimeInterval = 30.0
+    static let defaultPollInterval: TimeInterval = 30.0
+    static let unreadCountsPollInterval: TimeInterval = 5.0
+
+    private var pollInterval: TimeInterval = BadgeMonitor.defaultPollInterval
+    /// Whether badge text is published. Off, `appBadgeLabels` stays empty so a
+    /// count changing behind an unchanged dot does not rebuild the taskbar.
+    private var publishesLabels = false
+    private var collectedLabels: [String: String] = [:]
     private var observers: [NSObjectProtocol] = []
     private var pollTimer: Timer?
 
@@ -35,8 +45,15 @@ final class BadgeMonitor: ObservableObject {
             nextBadges[bundleIdentifier] = false
         }
 
+        collectedLabels = [:]
         dockBadgeStates(for: runningApplications).forEach { bundleIdentifier, hasBadge in
             nextBadges[bundleIdentifier] = hasBadge
+        }
+
+        let nextLabels = publishesLabels ? collectedLabels : [:]
+        if nextLabels != appBadgeLabels {
+            UnreadBadges.labels = nextLabels
+            appBadgeLabels = nextLabels
         }
 
         guard nextBadges != appBadges else {
@@ -44,6 +61,22 @@ final class BadgeMonitor: ObservableObject {
         }
 
         appBadges = nextBadges
+    }
+
+    /// While unread counts are shown, publishes the badge text and polls
+    /// faster, so a count follows new messages within seconds rather than half
+    /// a minute.
+    func setShowsUnreadCounts(_ showsCounts: Bool) {
+        let interval = showsCounts ? Self.unreadCountsPollInterval : Self.defaultPollInterval
+        guard showsCounts != publishesLabels || interval != pollInterval else {
+            return
+        }
+
+        publishesLabels = showsCounts
+        pollInterval = interval
+        pollTimer?.invalidate()
+        startPolling()
+        refresh()
     }
 
     private func registerObservers() {
@@ -70,7 +103,8 @@ final class BadgeMonitor: ObservableObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             self?.refresh()
         }
-        pollTimer?.tolerance = 10.0
+        // A third of the interval, as the 10 s on the default 30 s poll.
+        pollTimer?.tolerance = pollInterval / 3
     }
 
     private func dockBadgeStates(for applications: [NSRunningApplication]) -> [String: Bool] {
@@ -152,8 +186,11 @@ final class BadgeMonitor: ObservableObject {
             bundleIdentifiersByName: bundleIdentifiersByName
         ) ?? inheritedBundleIdentifier
 
-        if let bundleIdentifier, elementHasBadgeIndicator(element) {
+        if let bundleIdentifier, let label = badgeLabel(of: element) {
             badges[bundleIdentifier] = true
+            if !label.isEmpty || collectedLabels[bundleIdentifier] == nil {
+                collectedLabels[bundleIdentifier] = label
+            }
         }
 
         children(of: element).forEach { child in
@@ -207,26 +244,29 @@ final class BadgeMonitor: ObservableObject {
         return nil
     }
 
-    private func elementHasBadgeIndicator(_ element: AXUIElement) -> Bool {
+    /// The badge text when the element carries a badge: the Dock's status
+    /// label or a badge attribute, or "" for a badge known only from its
+    /// description. nil when there is no badge.
+    private func badgeLabel(of element: AXUIElement) -> String? {
         if let statusLabel = stringValue(for: element, attribute: "AXStatusLabel"), !statusLabel.isEmpty {
-            return true
+            return statusLabel
         }
 
         let attributeNames = attributeNames(for: element)
         for attribute in attributeNames where attribute.localizedCaseInsensitiveContains("badge") {
             if let value = stringValue(for: element, attribute: attribute), !value.isEmpty {
-                return true
+                return value
             }
         }
 
         if let description = stringValue(for: element, attribute: kAXDescriptionAttribute as String) {
             let normalizedDescription = description.lowercased()
             if normalizedDescription.contains("badge") || normalizedDescription.contains("notification") {
-                return true
+                return ""
             }
         }
 
-        return false
+        return nil
     }
 
     private func children(of element: AXUIElement) -> [AXUIElement] {

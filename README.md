@@ -28,7 +28,7 @@ Lightweight, native, no external dependencies. Does not modify any system settin
 - **Dock coexistence** — three modes (independent, auto-hide, hidden) with crash-safe restore
 - **Start at login** — LaunchAgent-based, no Developer ID required
 - **Blacklist** — hide apps you don't want in the taskbar
-- **Badge dots** — best-effort notification indicators
+- **Badge dots** — best-effort notification indicators, optionally with the unread count from the Dock badge
 - **Smooth animations** — fade in/out on window appear/disappear
 - **Accessibility graceful degradation** — works in reduced mode without AX permission
 

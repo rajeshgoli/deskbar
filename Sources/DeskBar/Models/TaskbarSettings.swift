@@ -93,6 +93,11 @@ class TaskbarSettings: ObservableObject {
         didSet { defaults.set(showOverFullScreenApps, forKey: "showOverFullScreenApps") }
     }
 
+    /// Draw the app's Dock badge text (such as an unread count) on its icons instead of a dot, and refresh badges every 5 seconds instead of 30. Off by default.
+    @Published var showUnreadCounts: Bool {
+        didSet { defaults.set(showUnreadCounts, forKey: "showUnreadCounts") }
+    }
+
     @Published var flashAttentionIndicators: Bool {
         didSet { defaults.set(flashAttentionIndicators, forKey: "flashAttentionIndicators") }
     }
@@ -228,6 +233,7 @@ class TaskbarSettings: ObservableObject {
         dockMode = DockMode(rawValue: defaults.string(forKey: "dockMode") ?? "") ?? .independent
         showOverFullScreenApps = defaults.object(forKey: "showOverFullScreenApps") as? Bool ?? false
         flashAttentionIndicators = defaults.object(forKey: "flashAttentionIndicators") as? Bool ?? true
+        showUnreadCounts = defaults.object(forKey: "showUnreadCounts") as? Bool ?? false
         showProgressIndicators = defaults.object(forKey: "showProgressIndicators") as? Bool ?? true
         enableActivityMode = defaults.object(forKey: "enableActivityMode") as? Bool ?? true
         showSystemResourceWidget = defaults.object(forKey: "showSystemResourceWidget") as? Bool ?? true

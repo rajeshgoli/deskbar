@@ -269,6 +269,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        settings.$showUnreadCounts
+            .receive(on: RunLoop.main)
+            .sink { [weak self] showsCounts in
+                UnreadBadges.showsCounts = showsCounts
+                self?.badgeMonitor?.setShowsUnreadCounts(showsCounts)
+            }
+            .store(in: &cancellables)
+
         settings.$showOverFullScreenApps
             .receive(on: RunLoop.main)
             .sink { [weak self] showOverFullScreenApps in
