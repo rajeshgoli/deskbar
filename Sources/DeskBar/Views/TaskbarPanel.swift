@@ -16,6 +16,8 @@ final class TaskbarPanel: NSPanel {
     private let rootView: TaskbarPanelRootView
     private let chromeShadowView: NSView
     private let visualEffectView: NSVisualEffectView
+    /// Solid fill drawn over the material when a custom background colour is on.
+    private let solidBackgroundView = NSView()
     private weak var hostedView: NSView?
     private var cancellables = Set<AnyCancellable>()
     private var pendingNormalizationFrame: NSRect?
@@ -70,6 +72,10 @@ final class TaskbarPanel: NSPanel {
         visualEffectView.state = .active
         visualEffectView.autoresizingMask = [.width, .height]
         visualEffectView.wantsLayer = true
+        solidBackgroundView.frame = visualEffectView.bounds
+        solidBackgroundView.autoresizingMask = [.width, .height]
+        solidBackgroundView.wantsLayer = true
+        visualEffectView.addSubview(solidBackgroundView)
         chromeShadowView.addSubview(visualEffectView)
         rootView.addSubview(chromeShadowView)
         rootView.chromeView = chromeShadowView
@@ -83,12 +89,50 @@ final class TaskbarPanel: NSPanel {
             }
             .store(in: &cancellables)
 
+        settings.$useCustomBackgroundColor
+            .combineLatest(settings.$backgroundColor)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] isEnabled, color in
+                self?.applyBackgroundColor(isEnabled: isEnabled, color: color)
+            }
+            .store(in: &cancellables)
+
         settings.$layoutMode
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.updateFrameForCurrentState(animated: true)
             }
             .store(in: &cancellables)
+    }
+
+    /// A fully transparent mask: the material is not drawn, the subviews are.
+    private static let hiddenMaterialMask: NSImage = {
+        let image = NSImage(size: NSSize(width: 1, height: 1), flipped: false) { _ in true }
+        image.resizingMode = .stretch
+        return image
+    }()
+
+    /// Pixels the window server sees as fully transparent let clicks through
+    /// to the window behind, so the gaps between buttons would stop belonging
+    /// to the taskbar. Keep the fill just above that; it cannot be seen.
+    static let minimumBackgroundAlpha: CGFloat = 0.01
+    static let opaqueEnoughForAppearance: CGFloat = 0.5
+
+    private func applyBackgroundColor(isEnabled: Bool, color: StoredColor) {
+        solidBackgroundView.isHidden = !isEnabled
+        var fill = color
+        fill.alpha = max(fill.alpha, Self.minimumBackgroundAlpha)
+        solidBackgroundView.layer?.backgroundColor = fill.nsColor.cgColor
+        // The chosen colour is the whole background: with less than full
+        // opacity the desktop shows through it, not the blurred material.
+        visualEffectView.maskImage = isEnabled ? Self.hiddenMaterialMask : nil
+        updateVisualStyle(for: chromeShadowView.frame)
+        // Keep titles and widgets legible over the chosen colour. A mostly
+        // see-through colour says little about what is behind it, so the
+        // system appearance is kept.
+        rootView.appearance = isEnabled && color.alpha >= Self.opaqueEnoughForAppearance
+            ? NSAppearance(named: color.isDark ? .darkAqua : .aqua)
+            : nil
     }
 
     func setContentSubview(_ view: NSView) {
@@ -235,7 +279,11 @@ final class TaskbarPanel: NSPanel {
         chromeShadowView.layer?.cornerRadius = cornerRadius
         chromeShadowView.layer?.masksToBounds = false
         chromeShadowView.layer?.shadowColor = NSColor.black.cgColor
-        chromeShadowView.layer?.shadowOpacity = usesGlassChrome ? 0.28 : 0
+        // The shadow is drawn under the whole shape, so a see-through custom
+        // colour would show it as a dark tint inside the bar. Fade it with the
+        // colour's opacity.
+        let backgroundOpacity = settings.useCustomBackgroundColor ? Float(settings.backgroundColor.alpha) : 1
+        chromeShadowView.layer?.shadowOpacity = usesGlassChrome ? 0.28 * backgroundOpacity : 0
         chromeShadowView.layer?.shadowRadius = usesGlassChrome ? 14 : 0
         chromeShadowView.layer?.shadowOffset = NSSize(width: 0, height: 2)
         chromeShadowView.layer?.shadowPath = usesGlassChrome

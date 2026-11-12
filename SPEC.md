@@ -543,6 +543,8 @@ Settings table:
 | Drag reorder | true |
 | Middle-click closes | true |
 | Thumbnail size | 200pt |
+| Use a custom background color | false |
+| Background color | `#000000FF` (sRGB, `#RRGGBBAA`) |
 | Hover delay | 400ms |
 | Dock mode | `independent` (options: `independent`, `autoHide`, `hidden`) |
 | Show over full-screen apps | false |

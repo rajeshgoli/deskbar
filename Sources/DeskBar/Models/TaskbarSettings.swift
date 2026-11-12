@@ -68,6 +68,15 @@ class TaskbarSettings: ObservableObject {
         didSet { defaults.set(middleClickCloses, forKey: "middleClickCloses") }
     }
 
+    /// Paint the taskbar with `backgroundColor` instead of the system material. Off by default.
+    @Published var useCustomBackgroundColor: Bool {
+        didSet { defaults.set(useCustomBackgroundColor, forKey: "useCustomBackgroundColor") }
+    }
+
+    @Published var backgroundColor: StoredColor {
+        didSet { defaults.set(backgroundColor.hex, forKey: "backgroundColor") }
+    }
+
     @Published var thumbnailSize: CGFloat {
         didSet { defaults.set(thumbnailSize, forKey: "thumbnailSize") }
     }
@@ -222,6 +231,8 @@ class TaskbarSettings: ObservableObject {
         dragReorder = defaults.object(forKey: "dragReorder") as? Bool ?? true
         middleClickCloses = defaults.object(forKey: "middleClickCloses") as? Bool ?? true
         thumbnailSize = defaults.object(forKey: "thumbnailSize") as? CGFloat ?? Self.defaultThumbnailSize
+        useCustomBackgroundColor = defaults.object(forKey: "useCustomBackgroundColor") as? Bool ?? false
+        backgroundColor = defaults.string(forKey: "backgroundColor").flatMap(StoredColor.init(hex:)) ?? .black
         hoverDelay = defaults.object(forKey: "hoverDelay") as? TimeInterval ?? 0.4
         hiddenTrayApps = defaults.dictionary(forKey: "hiddenTrayApps") as? [String: String] ?? [:]
         enableTrayIconHiding = defaults.object(forKey: "enableTrayIconHiding") as? Bool ?? true
