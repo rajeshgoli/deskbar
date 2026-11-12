@@ -97,6 +97,11 @@ final class RunningAppTrayView: NSStackView {
             .sink { [weak self] _ in self?.rebuildIcons() }
             .store(in: &cancellables)
 
+        settings.$keepMinimizedWindowsInTaskbar
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.rebuildIcons() }
+            .store(in: &cancellables)
+
         settings.$hiddenTrayApps
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -259,14 +264,17 @@ final class RunningAppTrayView: NSStackView {
     }
 
     private func rebuildIcons() {
-        let minimizedWindows = localMinimizedWindows
+        let ownedMinimizedWindows = localMinimizedWindows
+        // With minimized windows kept as task buttons, nothing is parked here, but their owners
+        // still stay out of the app-level tray so the app does not show up twice.
+        let minimizedWindows = settings.keepMinimizedWindowsInTaskbar ? [] : ownedMinimizedWindows
         // An app whose windows are all minimized would otherwise appear twice: once as a tray app
         // icon (it has no visible windows here) and again as its per-window items. The per-window
         // items are the more useful representation — they name the window and restore just it — so
         // they win and the app-level icon is dropped.
         let applications = Self.trayApplications(
             localTrayApps,
-            excludingOwnersOf: minimizedWindows,
+            excludingOwnersOf: ownedMinimizedWindows,
             hiddenBundleIdentifiers: Set(settings.hiddenTrayApps.keys),
             hidingEnabled: settings.enableTrayIconHiding
         )

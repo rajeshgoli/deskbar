@@ -551,6 +551,13 @@ final class TaskbarContentView: NSView {
             }
             .store(in: &cancellables)
 
+        settings.$keepMinimizedWindowsInTaskbar
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.scheduleRebuildTaskZone()
+            }
+            .store(in: &cancellables)
+
         settings.$flashAttentionIndicators
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
@@ -691,7 +698,7 @@ final class TaskbarContentView: NSView {
         // actually gets task buttons. Virtual SM agent tabs inherit their terminal window's
         // minimized state, so the same predicate partitions them correctly.
         let knownWindows = smScopedWindows(baseWindows: baseKnownWindows)
-        let scopedWindows = knownWindows.filter(WindowManager.belongsInTaskZone)
+        let scopedWindows = knownWindows.filter(belongsInTaskZone)
         let screen = ScreenGeometry.screen(for: displayID)
         let shouldGroupWindows = shouldGroupWindows(scopedWindows)
         if shouldGroupWindows {
@@ -769,7 +776,11 @@ final class TaskbarContentView: NSView {
     /// The windows that actually get task buttons: known windows, SM agent tabs resolved, minus
     /// anything parked in the tray.
     private func scopedTaskZoneWindows() -> [WindowInfo] {
-        smScopedWindows(baseWindows: scopedKnownWindows()).filter(WindowManager.belongsInTaskZone)
+        smScopedWindows(baseWindows: scopedKnownWindows()).filter(belongsInTaskZone)
+    }
+
+    private func belongsInTaskZone(_ window: WindowInfo) -> Bool {
+        WindowManager.belongsInTaskZone(window, keepingMinimized: settings.keepMinimizedWindowsInTaskbar)
     }
 
     private func smScopedWindows(baseWindows: [WindowInfo]) -> [WindowInfo] {
